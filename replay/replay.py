@@ -22,14 +22,17 @@ from .readers import READERS
 
 
 def _day(value: str) -> date:
+    if value == "today":
+        return date.today()
     try: return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError as exc: raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from exc
+    except ValueError as exc: raise argparse.ArgumentTypeError("expected YYYY-MM-DD or 'today'") from exc
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Convert and replay already-collected observations as JSONL")
     result.add_argument("--config", help="configuration file (default: ./config.json)")
-    result.add_argument("--from", dest="start", help="inclusive YYYY-MM-DD, or 'now' with --follow")
+    result.add_argument("--from", dest="start",
+                        help="inclusive YYYY-MM-DD, 'today', or 'now' with --follow")
     result.add_argument("--to", type=_day, help="exclusive YYYY-MM-DD; omit only with --follow")
     result.add_argument("--follow", action="store_true", help="continue monitoring collected files after catch-up")
     result.add_argument("--source", action="append", choices=sorted(READERS), help="repeat to select sources; default: all")
@@ -82,7 +85,7 @@ def main(argv=None) -> int:
     emit = sink.write
     try:
         if args.start != "now":
-            start = _day(args.start); end = args.to or (date.today() + timedelta(days=1))
+            start = _day(args.start); end = args.to or (start + timedelta(days=1))
             for item in historical(catalog, sources, start, end, weather_locations=weather_locations,
                                    cctv_locations=cctv_locations, local_timezone=args.timezone):
                 emit(item); seen.add(item.id)

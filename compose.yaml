@@ -1,5 +1,5 @@
 services:
-  enrichment:
+  processing:
     build:
       context: .
       target: processing
@@ -17,42 +17,9 @@ services:
       HF_HOME: /output/huggingface-cache
     volumes:
       - ${OBSERVATION_OUTPUT_HOST:?Run ./docker-start instead}:/output
-    command: ["python", "-m", "processing.enrichment.service", "--host", "0.0.0.0", "--port", "8770", "--anomaly-threshold", "${OBSERVATION_ANOMALY_THRESHOLD:-0.25}", "--text-model", "${OBSERVATION_TEXT_MODEL:-gpt-4o-mini}", "--vision-model", "${OBSERVATION_VISION_MODEL:-gpt-4o-mini}"]
-
-  receiver:
-    build:
-      context: .
-      target: processing
-      args:
-        PYTORCH_VERSION: ${OBSERVATION_PYTORCH_VERSION:-2.7.1}
-        PYTORCH_INDEX_URL: ${OBSERVATION_PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu118}
-    image: urban-observation-processing:local
-    restart: unless-stopped
-    networks: [processing-network]
-    depends_on: [enrichment]
     ports:
       - "${OBSERVATION_RECEIVER_BIND_HOST:-127.0.0.1}:${OBSERVATION_RECEIVER_PORT:-8766}:8766"
-    volumes:
-      - ${OBSERVATION_OUTPUT_HOST:?Run ./docker-start instead}:/output
-    command: ["python", "-m", "processing.receiver.receiver", "--host", "0.0.0.0", "--port", "8766", "--output", "/output/${OBSERVATION_OUTPUT_FILE:-observations.jsonl}", "--max-message-bytes", "${OBSERVATION_MAX_MESSAGE_BYTES:-25000000}", "--enrichment-url", "http://enrichment:8770"]
-
-  live-replay:
-    build: {context: ., target: replay}
-    image: urban-observation-replay:local
-    restart: unless-stopped
-    networks: [processing-network]
-    depends_on: [receiver]
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - type: bind
-        source: ${OBSERVATION_DATA_HOST:?Run ./docker-start instead}
-        target: ${OBSERVATION_DATA_HOST:?Run ./docker-start instead}
-        read_only: true
-      - type: bind
-        source: ${OBSERVATION_BACKUP_HOST:?Run ./docker-start instead}
-        target: ${OBSERVATION_BACKUP_HOST:?Run ./docker-start instead}
-        read_only: true
-    command: ["python", "-m", "replay.replay", "--from", "now", "--follow", "--data-root", "${OBSERVATION_DATA_HOST}", "--backup-root", "${OBSERVATION_BACKUP_HOST}", "--receiver-host", "receiver", "--receiver-port", "8766"]
+    command: ["python", "-m", "processing.service", "--host", "0.0.0.0", "--port", "8766", "--output", "/output/${OBSERVATION_OUTPUT_FILE:-observations.jsonl}", "--max-message-bytes", "${OBSERVATION_MAX_MESSAGE_BYTES:-25000000}", "--anomaly-threshold", "${OBSERVATION_ANOMALY_THRESHOLD:-0.25}", "--text-model", "${OBSERVATION_TEXT_MODEL:-gpt-4o-mini}", "--vision-model", "${OBSERVATION_VISION_MODEL:-gpt-4o-mini}"]
 
 networks:
   processing-network:

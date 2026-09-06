@@ -63,7 +63,7 @@ case "$OBSERVATION_GPU" in
 esac
 action=${1:-help}; shift || true
 case "$action" in
-  up) exec "${compose[@]}" up -d --build "$@" ;;
+  up) exec "${compose[@]}" up -d --build --remove-orphans "$@" ;;
   down|stop|start|restart|ps|logs|build|pull) exec "${compose[@]}" "$action" "$@" ;;
   config) exec "${compose[@]}" config --quiet ;;
   *) echo "Usage: ./docker-start {up|down|stop|start|restart|ps|logs|build|pull|config}" ;;

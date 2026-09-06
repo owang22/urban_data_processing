@@ -8,39 +8,37 @@ It does not collect provider data and it does not generate synthetic data.
 
 ## How it fits together
 
-On a storage machine, install this repository with `urban-observations` and run
-the replay sender against collected files or TAR archives. On a compute machine,
-run its receiver and enrichment containers beside SIGMUS or IncidentLens.
+On a storage machine, run the replay Python command against collected files or
+TAR archives. On a compute machine, run the combined receiving and enrichment
+container beside SIGMUS or IncidentLens.
 
 ```text
 stored real data ──┐
-                   ├── replay ── TCP:8766 ──> receiver ── HTTP ──> enrichment
-stored simulation ─┘                                      |
-                                                         JSONL
-                                                   SIGMUS / IncidentLens
+                   ├── replay ── TCP:8766 ──> receive + enrich
+stored simulation ─┘                              |
+                                                  JSONL
+                                            SIGMUS / IncidentLens
 ```
 
-The receiver and enrichment service normally run together on the SIGMUS or
-IncidentLens machine. The replay command can run there too, or on the storage
-machine containing the collected files. `8766/tcp` is the only cross-machine
-port required.
+Receiving and enrichment run in one container on the SIGMUS or IncidentLens
+machine. Replay is an interactive Python command on the storage machine, so the
+operator can stop it, change its date or sources, and restart it independently.
+`8766/tcp` is the only cross-machine port required.
 
 ## Runtime and command count
 
 | Part | How it runs | Routine command |
 |---|---|---|
-| Receiver | Docker container | `./docker-start up` |
-| Enrichment | Docker container, started by the same wrapper | `./docker-start up` |
-| Real replay sender | Host Python | `python -m replay.replay ...` |
+| Receiver and enrichment | One Docker container | `./docker-start up` |
+| Live real replay | Host Python | `python -m replay.replay --from today --follow` |
+| Historical real replay | Host Python | `python -m replay.replay ...` |
 | Synthetic replay sender | Host Python | `python -m replay.synthetic ...` |
 
-After one-time setup, an end-to-end processing run takes **two commands**: one
-Docker start on the compute machine and one Python replay command on the machine
-with the input data. If the services are already running, only the replay
-command is needed. The first Docker setup uses three commands below; the first
-host-Python setup uses the four installation commands below.
+Run `./docker-start up` on the receiving/compute machine. On the sending/storage
+machine, configure the receiving machine's reachable address under
+`replay.receiver.host`, then start or stop the Python replay command as needed.
 
-## Start the receiver and enrichment service
+## Start receiving and enrichment
 
 Requirements: Docker with the Compose plugin, an OpenAI API key, and optionally
 a Google Places API key for geocoding.
@@ -52,8 +50,8 @@ chmod 600 config.json
 ```
 
 Set `enrichment.openai_api_key` in `config.json`. Set
-`enrichment.google_places_api_key` if geocoding is wanted. The services run in
-the background and append enriched records to the explicit
+`enrichment.google_places_api_key` if geocoding is wanted. The container runs
+in the background and appends enriched records to the explicit
 `receiver.output_path` JSONL file.
 
 Useful commands:
@@ -90,10 +88,17 @@ CPU. The launcher adds `compose.gpu.yaml` only on GPU-capable Docker hosts, so
 the same configuration remains portable to CPU-only machines. Hugging Face
 model downloads are cached under the persistent processing output directory.
 
-The Compose stack also runs `live-replay`. At startup it baselines files already
-present for the current day, then follows newly collected files from every
-supported source. Each item is sent to `receiver` and acknowledged only after
-enrichment and durable JSONL storage, so replay remains naturally backpressured.
+For live data, run the replay command in a terminal on the machine containing
+the collected data:
+
+```bash
+.venv/bin/python -m replay.replay --from today --follow
+```
+
+It first sends files from today and then follows newly collected files from
+every supported source. Press Ctrl-C whenever you want to stop or change the
+replay. Each item is acknowledged only after enrichment and durable JSONL
+storage, so replay remains naturally backpressured.
 
 When an enriched observation has coordinates but no natural-language location,
 processing reverse-geocodes the coordinates with Google. SIGMUS retains the

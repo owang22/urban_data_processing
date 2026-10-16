@@ -183,6 +183,24 @@ aliases.
 The simulator already chose the incident types, run counts, and number of
 steps. Replay only reads the resulting files.
 
+## Map explorer
+
+A read-only web map of the raw data: AlertCalifornia cameras with their view
+direction (re-aimed cameras in red, with a frame-by-frame player), Caltrans
+CCTV, CHP incidents, geolocated GDELT news and weather, with a time slider.
+It uses the replay readers, so it shows what replay would send. It needs no
+API keys and no extra packages.
+
+```bash
+python -m explorer.server            # http://127.0.0.1:8095
+python -m explorer.server --days 7   # load more history (default 3 days)
+```
+
+It reads `paths.data_root` from `config.json` (or `--data-root`) and binds to
+localhost. From another machine, forward the port first:
+`ssh -L 8095:localhost:8095 <user>@<server>`. CHP incidents arrive as a daily
+file the next morning, so the current day has none.
+
 ## Verify changes
 
 ```bash

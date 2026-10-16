@@ -1,0 +1,60 @@
+:root {
+  --bg: #f6f4ef; --panel: #fffdf8; --fg: #1f2420; --muted: #66706a; --line: #ddd8cc;
+  --accent: #c2410c; --ac: #ea7a1a; --reaim: #d6203a; --cctv: #2563a8; --chp: #b91c1c;
+  --news: #6d3fb5; --news-alert: #a3165f; --weather: #0f766e;
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151816; --panel: #1c201d; --fg: #e8e6df; --muted: #9aa39c; --line: #313830;
+    --accent: #f08a4b; --cctv: #6ea8e8; --news: #a888e6; --news-alert: #e0679f; --weather: #3fbfb2; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); display: flex; }
+#map { flex: 1; min-width: 0; height: 100%; }
+#panel { width: 360px; height: 100%; background: var(--panel); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0; }
+#panel > * { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+#status { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.time { display: grid; gap: 8px; }
+#slider { width: 100%; accent-color: var(--accent); }
+#clock { font-variant-numeric: tabular-nums; font-weight: 600; }
+.live { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+select { font: inherit; padding: 2px 4px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+.layers { display: grid; gap: 4px; }
+.layers label { display: grid; grid-template-columns: auto 14px 1fr auto; gap: 8px; align-items: center; }
+.layers .swatch { width: 12px; height: 12px; border-radius: 50%; }
+.layers .count { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.layers .note { color: var(--muted); font-size: 12px; margin: 2px 0 0 22px; }
+.feed { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; border-bottom: 0 !important; }
+.tabs { display: flex; gap: 4px; }
+.tabs button { flex: 1; font: inherit; font-size: 13px; padding: 5px; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.filter { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+#list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+#list li { padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+#list li:hover .t { text-decoration: underline; }
+#list .t { font-weight: 550; overflow-wrap: anywhere; }
+#list .m { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#list .empty { color: var(--muted); cursor: default; border: 0; }
+
+.leaflet-popup-content { margin: 10px 12px; min-width: 220px; font: 13px/1.4 var(--font); }
+.pop h3 { margin: 0 0 2px; font-size: 14px; }
+.pop .m { color: #5c645e; font-size: 12px; font-variant-numeric: tabular-nums; }
+.pop img { display: block; width: 100%; margin-top: 6px; border-radius: 3px; background: #ddd; min-height: 120px; }
+.pop .scrub { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.pop .scrub input { flex: 1; }
+.pop .scrub button { font: inherit; padding: 1px 8px; cursor: pointer; }
+.pop a { overflow-wrap: anywhere; }
+.dot { display: block; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.wx { background: rgba(255,255,255,.92); color: #0f3d39; border: 1px solid #0f766e; border-radius: 10px;
+  padding: 1px 6px; font: 600 11px/1.5 var(--font); white-space: nowrap; display: inline-flex; gap: 3px; align-items: center; }
+.wx i { display: inline-block; font-style: normal; }
+
+@media (max-width: 760px) {
+  body { flex-direction: column; }
+  #map { height: 55%; flex: none; }
+  #panel { width: 100%; height: 45%; border-left: 0; border-top: 1px solid var(--line); }
+}

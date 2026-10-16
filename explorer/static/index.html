@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LA Observation Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+<aside id="panel">
+  <header>
+    <h1>LA Observation Map</h1>
+    <p id="status">Loading…</p>
+  </header>
+
+  <section class="time">
+    <div class="row">
+      <label class="live"><input type="checkbox" id="live" checked> Live</label>
+      <output id="clock"></output>
+    </div>
+    <input type="range" id="slider" min="0" max="1" step="300" value="1" aria-label="Time">
+    <div class="row">
+      <label for="window">Show the last</label>
+      <select id="window">
+        <option value="1">1 hour</option>
+        <option value="3" selected>3 hours</option>
+        <option value="6">6 hours</option>
+        <option value="12">12 hours</option>
+        <option value="24">24 hours</option>
+        <option value="48">48 hours</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="layers" id="layers"></section>
+
+  <section class="feed">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="news" aria-selected="true">News</button>
+      <button role="tab" data-tab="incidents">CHP incidents</button>
+      <button role="tab" data-tab="reaimed">Re-aimed</button>
+    </div>
+    <label class="filter" id="alertFilter"><input type="checkbox" id="alertsOnly" checked> Emergency-related only</label>
+    <ol id="list"></ol>
+  </section>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

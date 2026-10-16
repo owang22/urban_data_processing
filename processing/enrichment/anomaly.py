@@ -1455,6 +1455,7 @@ class ImageCameraState:
 
     last_signature: Optional[bytes] = None
     last_signature_timestamp: Optional[datetime] = None
+    first_signature_timestamp: Optional[datetime] = None
     last_model_timestamp: Optional[datetime] = None
     frames_seen: int = 0
     model_runs: int = 0
@@ -1758,6 +1759,7 @@ class ImageAnomalyDetector:
         if state.last_signature is None:
             state.last_signature = signature
             state.last_signature_timestamp = timestamp
+            state.first_signature_timestamp = timestamp
             if self.run_on_first_frame:
                 diagnostics.update({
                     "decision": "run",
@@ -1787,8 +1789,11 @@ class ImageAnomalyDetector:
         if state.last_model_timestamp is not None:
             heartbeat_elapsed_seconds = max(0.0, (timestamp - state.last_model_timestamp).total_seconds())
             heartbeat_due = heartbeat_elapsed_seconds >= self.heartbeat_seconds
-        elif state.last_signature_timestamp is not None:
-            heartbeat_elapsed_seconds = max(0.0, (timestamp - state.last_signature_timestamp).total_seconds())
+        elif state.first_signature_timestamp is not None:
+            # The model has never run for this camera. Count from its first
+            # frame: the previous frame is always one interval ago, so counting
+            # from it would never reach the heartbeat.
+            heartbeat_elapsed_seconds = max(0.0, (timestamp - state.first_signature_timestamp).total_seconds())
             heartbeat_due = heartbeat_elapsed_seconds >= self.heartbeat_seconds
         else:
             heartbeat_due = False

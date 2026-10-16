@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timedelta
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -15,6 +16,7 @@ from .protocol import (
     DEFAULT_RECEIVER_PORT,
     DEFAULT_RECEIVER_RETRIES,
     DEFAULT_RECEIVER_TIMEOUT,
+    ObservationRejected,
     SocketJSONLSink,
     receiver_config,
 )
@@ -26,6 +28,41 @@ def _day(value: str) -> date:
         return date.today()
     try: return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc: raise argparse.ArgumentTypeError("expected YYYY-MM-DD or 'today'") from exc
+
+
+def _near(value: str) -> tuple[float, float, float]:
+    try:
+        latitude, longitude, radius = (float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected LAT,LON,KM") from exc
+    return latitude, longitude, radius
+
+
+def _instant(value: str) -> datetime:
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected an ISO 8601 time with a UTC offset") from exc
+    if result.tzinfo is None:
+        raise argparse.ArgumentTypeError("expected an ISO 8601 time with a UTC offset")
+    return result
+
+
+def _distance_km(lat1, lon1, lat2, lon2) -> float:
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    a = (math.sin((phi2 - phi1) / 2) ** 2
+         + math.cos(phi1) * math.cos(phi2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
+    return 6371.0 * 2 * math.asin(math.sqrt(a))
+
+
+def _selected(item, args) -> bool:
+    if args.near is not None:
+        if item.latitude is None or item.longitude is None: return False
+        if _distance_km(args.near[0], args.near[1], item.latitude, item.longitude) > args.near[2]: return False
+    if args.between is not None:
+        start, end = args.between
+        if not start <= _instant(item.time) < end: return False
+    return True
 
 
 def parser() -> argparse.ArgumentParser:
@@ -49,6 +86,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--receiver-port", "--socket-port", dest="receiver_port", type=int)
     result.add_argument("--receiver-timeout", "--ack-timeout", dest="receiver_timeout", type=float)
     result.add_argument("--receiver-retries", "--network-retries", dest="receiver_retries", type=int)
+    result.add_argument("--skip-rejected", action="store_true",
+                        help="log observations the receiver rejects to stderr and continue")
+    result.add_argument("--limit", type=int, help="stop after sending this many historical observations")
+    result.add_argument("--near", type=_near, metavar="LAT,LON,KM",
+                        help="only observations with coordinates within KM of this point")
+    result.add_argument("--between", type=_instant, nargs=2, metavar=("START", "END"),
+                        help="only observations at or after START and before END (ISO 8601 with offset)")
     return result
 
 
@@ -82,12 +126,24 @@ def main(argv=None) -> int:
     sink = (SocketJSONLSink(receiver_host, receiver_port, timeout=receiver_timeout,
                            retries=receiver_retries)
             if receiver_host else JSONLSink(sys.stdout))
-    emit = sink.write
+    skipped = 0
+
+    def emit(item):
+        nonlocal skipped
+        try:
+            sink.write(item)
+        except ObservationRejected as exc:
+            if not args.skip_rejected: raise
+            skipped += 1
+            print(json.dumps({"skipped": item.id, "error": str(exc)}), file=sys.stderr, flush=True)
+
     try:
         if args.start != "now":
             start = _day(args.start); end = args.to or (start + timedelta(days=1))
             for item in historical(catalog, sources, start, end, weather_locations=weather_locations,
                                    cctv_locations=cctv_locations, local_timezone=args.timezone):
+                if not _selected(item, args): continue
+                if args.limit is not None and len(seen) >= args.limit: break
                 emit(item); seen.add(item.id)
         else:
             # Monitoring means records appearing after startup, not replaying today's
@@ -105,6 +161,7 @@ def main(argv=None) -> int:
     finally:
         close = getattr(sink, "close", None)
         if close is not None: close()
+        if skipped: print(f"skipped {skipped} rejected observation(s)", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

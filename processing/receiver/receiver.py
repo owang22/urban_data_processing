@@ -11,6 +11,7 @@ from typing import Protocol
 
 from urban_observation_model import Observation, ObservationValidationError
 from processing.enrichment import EnrichmentClient
+from processing.enrichment.backends import BudgetExceeded
 
 
 class ObservationHandler(Protocol):
@@ -39,12 +40,16 @@ class EnrichingHandler:
         self.downstream.handle(self.client.enrich(observation, force=self.force))
 
 
-def _reply(writer, observation_id, accepted, *, error=None, retryable=None):
+def _reply(writer, observation_id, accepted, *, error=None, retryable=None, stop=False):
     value = {"id": observation_id, "accepted": bool(accepted)}
     if error is not None:
         value["error"] = str(error)
     if retryable is not None:
         value["retryable"] = bool(retryable)
+    if stop:
+        # The receiver cannot accept anything more (for example, the OpenAI
+        # budget is spent), so the sender should stop instead of skipping ahead.
+        value["stop"] = True
     writer.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
     writer.flush()
 
@@ -70,13 +75,21 @@ def handle_connection(connection, handler: ObservationHandler, *, max_message_by
                     handler.handle(observation)
                     _reply(writer, observation.id, True)
                     accepted += 1
+                except BudgetExceeded as exc:
+                    _reply(writer, observation_id, False, error=exc, retryable=False, stop=True)
                 except (json.JSONDecodeError, ObservationValidationError, ValueError) as exc:
                     _reply(writer, observation_id, False, error=exc, retryable=False)
                 except Exception as exc:
                     _reply(writer, observation_id, False, error=exc, retryable=True)
+        except OSError:
+            # The sender went away mid-reply; only this connection is affected.
+            pass
         finally:
-            reader.close()
-            writer.close()
+            for handle in (reader, writer):
+                try:
+                    handle.close()
+                except OSError:
+                    pass
     return accepted
 
 

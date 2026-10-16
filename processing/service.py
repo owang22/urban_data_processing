@@ -6,7 +6,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .enrichment.backends import OpenAIBackend, retrieve_article
+from .enrichment.backends import OpenAIBackend, UsageLedger, retrieve_archived_article, retrieve_article
 from .enrichment.cache import EnrichmentCache
 from .enrichment.enricher import Enricher, NoModelBackend
 from .receiver.receiver import EnrichingHandler, JSONLHandler, serve
@@ -31,18 +31,32 @@ def main(argv=None):
         "--cache",
         default=os.environ.get("URBAN_ENRICHMENT_CACHE", "/cache/enrichment.sqlite3"),
     )
+    parser.add_argument(
+        "--openai-budget-usd", type=float,
+        default=float(os.environ["URBAN_OPENAI_BUDGET_USD"])
+        if os.environ.get("URBAN_OPENAI_BUDGET_USD") else None,
+        help="stop calling OpenAI once this much has been spent, as counted in --usage-ledger",
+    )
+    parser.add_argument(
+        "--usage-ledger",
+        default=os.environ.get("URBAN_OPENAI_USAGE_LEDGER", "/output/openai-usage.jsonl"),
+    )
     args = parser.parse_args(argv)
 
+    ledger = (UsageLedger(args.usage_ledger, budget_usd=args.openai_budget_usd)
+              if args.openai_budget_usd is not None else None)
     backend = NoModelBackend() if args.anomaly_only else OpenAIBackend(
         text_model=args.text_model,
         vision_model=args.vision_model,
         base_url=args.openai_base_url,
+        ledger=ledger,
     )
     cache = EnrichmentCache(args.cache, version=Enricher.VERSION) if args.cache else None
     enricher = Enricher(
         backend,
         anomaly_threshold=args.anomaly_threshold,
         article_retriever=retrieve_article,
+        archive_retriever=retrieve_archived_article,
         cache=cache,
     )
 

@@ -30,6 +30,14 @@ class ProtocolError(RuntimeError):
     pass
 
 
+class ObservationRejected(ProtocolError):
+    """The receiver refused this one observation and will not accept it on retry."""
+
+
+class ReceiverStopped(ProtocolError):
+    """The receiver asked the sender to stop sending entirely."""
+
+
 def inline_observation(observation: Observation) -> dict[str, Any]:
     """Return a portable observation with every referenced file embedded."""
     value = observation.to_dict()
@@ -89,8 +97,10 @@ class SocketJSONLSink:
                     return
                 if response.get("accepted") is False:
                     error = str(response.get("error") or "receiver rejected observation")
+                    if response.get("stop"):
+                        raise ReceiverStopped(error)
                     if not response.get("retryable", False):
-                        raise ProtocolError(error)
+                        raise ObservationRejected(error)
                     raise ConnectionError(error)
                 raise ProtocolError(f"unexpected receiver response: {response!r}")
             except ProtocolError:

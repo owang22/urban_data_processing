@@ -217,3 +217,138 @@ def test_geocoding_is_reused_across_different_observations(tmp_path):
         observation(data={"body": "second fire"}, observation_id="second"))
     assert second_backend.text_calls == ["second fire"]
     assert second_backend.locations == []
+
+
+def test_cached_result_without_coordinates_is_placed_without_a_new_model_call(tmp_path):
+    value = {"schema_version": SCHEMA_VERSION, "id": "gdelt:9", "source": "gdelt",
+             "time": "2025-01-07T19:00:00Z", "sensor": "gdelt",
+             "data": {"headline": "Fire in Pacific Palisades"}, "files": []}
+    cache = EnrichmentCache(tmp_path / "cache.sqlite3", version=Enricher.VERSION)
+    source = Observation.from_dict(value)
+    cache.put(source, False, Observation.from_dict(
+        {**value, "annotations": {"location": {"text": "Pacific Palisades"}}}))
+
+    class NoGeocoderBackend(Backend):
+        def geocode(self, location): self.locations.append(location); return None
+
+    unplaced = Enricher(NoGeocoderBackend(), detector=Detector(.9), cache=cache).enrich(source)
+    assert "latitude" not in unplaced.value["annotations"]["location"]
+
+    backend = Backend()
+    placed = Enricher(backend, detector=Detector(.9), cache=cache).enrich(source)
+    assert placed.value["annotations"]["location"]["latitude"] == 34.05
+    assert backend.news_calls == [] and backend.locations == ["Pacific Palisades"]
+    # The placed result is saved, so the next run neither calls the model nor geocodes.
+    again = Backend()
+    Enricher(again, detector=Detector(.9), cache=cache).enrich(source)
+    assert again.locations == [] and again.news_calls == []
+
+
+def test_entities_are_not_geocoded_when_backend_opts_out(tmp_path):
+    class Limited(Backend):
+        geocode_entities = False
+        def annotate_news(self, value):
+            return {"location": {"text": "Los Angeles"},
+                    "entities": [{"name": "LAFD", "location": "Los Angeles City Hall"}]}
+    backend = Limited()
+    value = {"schema_version": SCHEMA_VERSION, "id": "gdelt:10", "source": "gdelt",
+             "time": "2025-01-07T19:00:00Z", "sensor": "gdelt",
+             "data": {"headline": "Fire"}, "files": []}
+    Enricher(backend, detector=Detector(.9)).enrich(Observation.from_dict(value))
+    assert backend.locations == ["Los Angeles"]
+
+
+def test_scores_on_other_scales_are_rescaled_to_unit_range():
+    class ScaleBackend(Backend):
+        def annotate_news(self, value):
+            return {"effects": [{"name": "Increased travel time", "score": 8},
+                                {"name": "road closure", "score": 0.4}],
+                    "incidents": [{"name": "2025 Palisades Fire", "score": 95}]}
+    annotations = Enricher(ScaleBackend(), detector=Detector(.8)).enrich(
+        observation(source="news", data={"headline": "Fire"})).value["annotations"]
+    assert annotations["effects"][0] == {"name": "Increased travel time", "score": .8, "raw_score": 8.0}
+    assert annotations["news_incidents"][0]["score"] == .95
+
+
+def test_cached_scores_on_other_scales_are_rescaled(tmp_path):
+    cache = EnrichmentCache(tmp_path / "cache.sqlite3", version=Enricher.VERSION)
+    source = observation(data={"body": "Fire"})
+    stored = source.to_dict()
+    stored["annotations"] = {"effects": [{"name": "smoke", "score": 7.0}]}
+    cache.put(source, False, Observation.from_dict(stored))
+    annotations = Enricher(Backend(), detector=Detector(.8), cache=cache).enrich(
+        source).value["annotations"]
+    assert annotations["effects"] == [{"name": "smoke", "score": .7, "raw_score": 7.0}]
+
+
+GKG_EXTRAS = ("<PAGE_PRECISEPUBTIMESTAMP>20250107061000</PAGE_PRECISEPUBTIMESTAMP>"
+              "<PAGE_TITLE>Strongest winds in over a decade could increase fire risk | Newsday</PAGE_TITLE>")
+
+
+def gdelt_story():
+    return observation(source="gdelt", data={"url": "https://example.test/story",
+                                             "provider_fields": ["1", "20250107091500", GKG_EXTRAS]})
+
+
+def test_unchanged_page_is_used_as_downloaded():
+    backend = Backend()
+    result = Enricher(backend, detector=Detector(.8), article_retriever=lambda url: (
+        "Newsday\nStrongest winds in over a decade could increase fire risk\nForecasters say...")
+    ).enrich(gdelt_story())
+    assert backend.news_calls[0].startswith("Newsday")
+    assert result.value["annotations"]["article_retrieval"] == {"status": "ok", "title_checked": True}
+
+
+def test_rewritten_page_uses_archived_copy_from_before_observation():
+    backend, asked = Backend(), []
+    def archive(url, before):
+        asked.append(before); return ("http://web.archive.org/web/1id_/x", "Windstorm warning text")
+    result = Enricher(backend, detector=Detector(.8),
+                      article_retriever=lambda url: "Palisades Fire destroys homes",
+                      archive_retriever=archive).enrich(gdelt_story())
+    assert asked == ["2026-09-02T12:00:00Z"]
+    assert backend.news_calls == ["Windstorm warning text"]
+    assert result.value["annotations"]["article_retrieval"]["status"] == "archived"
+
+
+def test_rewritten_page_without_archive_uses_gdelt_title_only():
+    backend = Backend()
+    result = Enricher(backend, detector=Detector(.8),
+                      article_retriever=lambda url: "Palisades Fire destroys homes",
+                      archive_retriever=lambda url, before: None).enrich(gdelt_story())
+    assert backend.news_calls == [
+        "Strongest winds in over a decade could increase fire risk | Newsday"]
+    assert result.value["annotations"]["article_retrieval"]["status"] == "page_changed_title_only"
+
+
+def test_cached_summary_of_rewritten_page_is_redone(tmp_path):
+    cache = EnrichmentCache(tmp_path / "cache.sqlite3", version=Enricher.VERSION)
+    source = gdelt_story()
+    stored = source.to_dict()
+    stored["annotations"] = {"summary": "Palisades Fire destroys homes",
+                             "article_retrieval": {"status": "ok"},
+                             "enrichment": {"status": "completed"}}
+    cache.put(source, False, Observation.from_dict(stored))
+    backend = Backend()
+    result = Enricher(backend, detector=Detector(.8), cache=cache,
+                      article_retriever=lambda url: "Palisades Fire destroys homes",
+                      archive_retriever=lambda url, before: None).enrich(source)
+    assert len(backend.news_calls) == 1
+    assert result.value["annotations"]["article_retrieval"]["status"] == "page_changed_title_only"
+
+
+def test_cached_summary_of_unchanged_page_is_kept_and_marked(tmp_path):
+    cache = EnrichmentCache(tmp_path / "cache.sqlite3", version=Enricher.VERSION)
+    source = gdelt_story()
+    stored = source.to_dict()
+    stored["annotations"] = {"summary": "windstorm", "article_retrieval": {"status": "ok"},
+                             "enrichment": {"status": "completed"}}
+    cache.put(source, False, Observation.from_dict(stored))
+    backend, fetches = Backend(), []
+    def fetch(url):
+        fetches.append(url); return "Strongest winds in over a decade could increase fire risk"
+    enricher = Enricher(backend, detector=Detector(.8), cache=cache, article_retriever=fetch)
+    assert enricher.enrich(source).value["annotations"]["summary"] == "windstorm"
+    assert Enricher(backend, detector=Detector(.8), cache=cache,
+                    article_retriever=fetch).enrich(source).value["annotations"]["summary"] == "windstorm"
+    assert backend.news_calls == [] and len(fetches) == 1

@@ -175,9 +175,16 @@ def _camera_locations(path: str | None) -> dict[str, tuple[float, float]]:
             coordinates = next((e.text for e in placemark.iter() if e.tag.endswith("coordinates") and e.text), None)
             if name and coordinates:
                 values = coordinates.strip().split(",")
-                result[name] = (float(values[1]), float(values[0]))
+                result[_camera_key(name)] = (float(values[1]), float(values[0]))
     except (OSError, ValueError, ET.ParseError): pass
     return result
+
+
+def _camera_key(name: str) -> str:
+    # Collected folder names are filesystem-safe variants of the KML names
+    # ("I-10 : (101) Mcclure West" -> "I-10 - (101) Mcclure West",
+    # "Griffith/San Pedro" -> "GriffithSan Pedro"), so match on letters and digits.
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
 def read_cameras(partition: Partition, *, source: str, cctv_locations: str | None = None,
@@ -191,7 +198,16 @@ def read_cameras(partition: Partition, *, source: str, cctv_locations: str | Non
         sensor = parts[-2] if len(parts) > 1 else "unknown"
         stem = PurePosixPath(stored.name).stem
         time = _timestamp(stem, partition.day, local_timezone)
-        lat, lon = camera_locations.get(sensor, (None, None)); data: dict[str, Any] = {}; refs = [_file_ref(stored, "image/jpeg")]
+        lat, lon = camera_locations.get(_camera_key(sensor), (None, None)); data: dict[str, Any] = {}; refs = [_file_ref(stored, "image/jpeg")]
+        if source == "cctv":
+            # From 16 Oct 2026 the collector writes "lat,lon" next to each image.
+            sidecar = by_rel.get(str(PurePosixPath(stored.relative_path).with_suffix(".location")))
+            if sidecar is not None:
+                try:
+                    lat, lon = (float(v) for v in sidecar.read_text().split(",")[:2])
+                    refs.append(_file_ref(sidecar, "text/plain"))
+                except ValueError:
+                    pass
         if source == "alertcalifornia":
             sidecar = by_rel.get(str(PurePosixPath(stored.relative_path).with_suffix(".location")))
             # The collector writes the image before Selenium finishes resolving
@@ -203,10 +219,28 @@ def read_cameras(partition: Partition, *, source: str, cctv_locations: str | Non
             try:
                 values = [v.strip() for v in sidecar.read_text().split(",")]
                 lat, lon = float(values[0]), float(values[1])
-                if len(values) > 2 and values[2]: data["direction_degrees"] = float(values[2])
+                direction = float(values[2]) if len(values) > 2 and values[2] else None
             except (ValueError, IndexError):
                 continue
             refs.append(_file_ref(sidecar, "text/plain"))
+            # Frames collected from 16 Oct 2026 on have a .json sidecar, and
+            # their third .location field is a compass bearing. Older frames
+            # hold a screen angle (0 = east, counter-clockwise); convert it.
+            metadata = by_rel.get(str(PurePosixPath(stored.relative_path).with_suffix(".json")))
+            if direction is not None:
+                data["direction_degrees"] = direction if metadata is not None else round((90 - direction) % 360, 2)
+            if metadata is not None:
+                try:
+                    meta = json.loads(metadata.read_text())
+                    props = meta.get("properties") or {}
+                    data.update({"camera_id": meta.get("camera_id"), "frame_source": meta.get("source"),
+                                 "reaimed": bool(meta.get("reaimed_since_last_run")),
+                                 "tilt_degrees": props.get("tilt_current"), "zoom": props.get("zoom_current"),
+                                 "field_of_view_degrees": props.get("fov") or None})
+                    data = {k: v for k, v in data.items() if v is not None}
+                    refs.append(_file_ref(metadata, "application/json"))
+                except ValueError:
+                    pass
         yield Observation(_id(source, sensor, time, stored.relative_path), source, time, sensor, data,
                           latitude=lat, longitude=lon, files=tuple(refs), raw=_raw(partition, stored, f"{source}_image.v1"))
 

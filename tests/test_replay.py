@@ -1,6 +1,7 @@
 import io
 import gzip
 import json
+from datetime import date
 from pathlib import Path
 import queue
 import socket
@@ -150,6 +151,25 @@ def test_alertcalifornia_waits_for_matching_location_sidecar(tmp_path):
     rows = list(observations(partition, "alertcalifornia"))
     assert len(rows) == 1
     assert (rows[0].latitude, rows[0].longitude) == (34.2, -118.2)
+    # Old sidecars hold a screen angle: 90 (north on screen) is bearing 0.
+    assert rows[0].data["direction_degrees"] == 0
+
+
+def test_alertcalifornia_reads_frame_metadata_and_blank_bearing(tmp_path):
+    data, backup, catalog = _catalog(tmp_path)
+    camera = data / "alertcalifornia" / "20260801" / "Castro Peak 1"
+    camera.mkdir(parents=True)
+    (camera / "20260801120000.jpg").write_bytes(b"jpeg")
+    (camera / "20260801120000.json").write_text(json.dumps({
+        "camera_id": "Axis-Castro1", "source": "1min-history", "reaimed_since_last_run": True,
+        "properties": {"tilt_current": -2.0, "zoom_current": 3.0, "fov": ""}}), encoding="utf-8")
+    (camera / "20260801120000.location").write_text("34.09,-118.79,", encoding="utf-8")
+    rows = list(observations(catalog.partition("alertcalifornia", "20260801"), "alertcalifornia"))
+
+    assert len(rows) == 1
+    assert rows[0].data == {"camera_id": "Axis-Castro1", "frame_source": "1min-history",
+                            "reaimed": True, "tilt_degrees": -2.0, "zoom": 3.0}
+    assert len(rows[0].files) == 3
 
 
 def _write_one_local_example_per_source(data: Path):
@@ -310,3 +330,77 @@ def test_socket_round_trip_inlines_local_image(tmp_path):
     value = received.get(timeout=1)
     import base64
     assert base64.b64decode(value["files"][0]["content_base64"]) == b"jpeg-content"
+
+
+def test_cctv_folder_names_match_kml_names_with_punctuation_changed(tmp_path):
+    kml = tmp_path / "cctv.kml"
+    kml.write_text("""<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>I-10 : (101) Mcclure West</name><Point><coordinates>-118.49,34.02</coordinates></Point></Placemark>
+<Placemark><name>I-10 : (125) Griffith/San Pedro</name><Point><coordinates>-118.25,34.03</coordinates></Point></Placemark>
+</Document></kml>""")
+    for camera in ["I-10 - (101) Mcclure West", "I-10 - (125) GriffithSan Pedro"]:
+        folder = tmp_path / "data" / "cctv" / "20250107" / camera
+        folder.mkdir(parents=True)
+        (folder / "20250107130000.jpg").write_bytes(b"jpg")
+    items = list(historical(DataCatalog(tmp_path / "data", tmp_path / "backup"), ["cctv"],
+                            date(2025, 1, 7), date(2025, 1, 8),
+                            cctv_locations=str(kml)))
+    assert {(item.sensor, item.latitude, item.longitude) for item in items} == {
+        ("I-10 - (101) Mcclure West", 34.02, -118.49), ("I-10 - (125) GriffithSan Pedro", 34.03, -118.25)}
+
+
+def test_replay_filters_by_place_and_time_and_limits(tmp_path, capsys, monkeypatch):
+    from replay import replay as cli
+    from replay.model import Observation as ReplayObservation
+    items = [
+        ReplayObservation("cctv:near-early", "cctv", "2025-01-07T17:00:00Z", "a", {}, latitude=34.04, longitude=-118.52),
+        ReplayObservation("cctv:near-1", "cctv", "2025-01-07T19:00:00Z", "a", {}, latitude=34.04, longitude=-118.52),
+        ReplayObservation("cctv:far", "cctv", "2025-01-07T19:00:00Z", "b", {}, latitude=33.70, longitude=-117.80),
+        ReplayObservation("gdelt:nowhere", "gdelt", "2025-01-07T19:00:00Z", "g", {}),
+        ReplayObservation("cctv:near-2", "cctv", "2025-01-07T19:15:00Z", "a", {}, latitude=34.05, longitude=-118.50),
+        ReplayObservation("cctv:near-3", "cctv", "2025-01-07T19:30:00Z", "a", {}, latitude=34.05, longitude=-118.50),
+    ]
+    monkeypatch.setattr(cli, "historical", lambda *a, **k: iter(items))
+    monkeypatch.setattr(cli, "get_config", lambda path: {"paths": {"data_root": str(tmp_path), "backup_root": str(tmp_path)}})
+    cli.main(["--from", "2025-01-07", "--to", "2025-01-08", "--no-receiver", "--source", "cctv",
+              "--near", "34.048,-118.526,20", "--between", "2025-01-07T18:00:00Z", "2025-01-08T02:00:00Z",
+              "--limit", "2"])
+    sent = [json.loads(line)["id"] for line in capsys.readouterr().out.splitlines()]
+    assert sent == ["cctv:near-1", "cctv:near-2"]
+
+
+def test_skip_rejected_logs_and_continues_but_stop_still_aborts(tmp_path, capsys, monkeypatch):
+    from replay import replay as cli
+    from replay.model import Observation as ReplayObservation
+    from replay.protocol import ObservationRejected, ReceiverStopped
+    items = [ReplayObservation(f"gdelt:{n}", "gdelt", f"2025-01-07T1{n}:00:00Z", "g", {}) for n in range(4)]
+    sent = []
+
+    class Sink:
+        def __init__(self, *a, **k): pass
+        def write(self, item):
+            if item.id == "gdelt:1": raise ObservationRejected("model returned invalid JSON")
+            if item.id == "gdelt:3": raise ReceiverStopped("budget spent")
+            sent.append(item.id)
+        def close(self): pass
+
+    monkeypatch.setattr(cli, "historical", lambda *a, **k: iter(items))
+    monkeypatch.setattr(cli, "SocketJSONLSink", Sink)
+    monkeypatch.setattr(cli, "get_config", lambda path: {"paths": {"data_root": str(tmp_path), "backup_root": str(tmp_path)}})
+    with pytest.raises(ReceiverStopped):
+        cli.main(["--from", "2025-01-07", "--to", "2025-01-08", "--receiver-host", "127.0.0.1",
+                  "--skip-rejected"])
+    assert sent == ["gdelt:0", "gdelt:2"]
+    assert '"skipped": "gdelt:1"' in capsys.readouterr().err
+
+
+def test_cctv_location_sidecar_overrides_inventory(tmp_path):
+    data, backup, catalog = _catalog(tmp_path)
+    camera = data / "cctv" / "20260801" / "SR-1 : (236) New Camera"
+    camera.mkdir(parents=True)
+    (camera / "20260801120000.jpg").write_bytes(b"jpeg")
+    (camera / "20260801120000.location").write_text("34.03,-118.68", encoding="utf-8")
+    rows = list(observations(catalog.partition("cctv", "20260801"), "cctv"))
+
+    assert (rows[0].latitude, rows[0].longitude) == (34.03, -118.68)
+    assert len(rows[0].files) == 2

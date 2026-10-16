@@ -9,7 +9,7 @@ import os
 from urllib.parse import parse_qs, urlparse
 
 from urban_observation_model import Observation, ObservationValidationError
-from .backends import OpenAIBackend, retrieve_article
+from .backends import OpenAIBackend, retrieve_archived_article, retrieve_article
 from .cache import EnrichmentCache
 from .enricher import Enricher, NoModelBackend
 
@@ -52,7 +52,8 @@ def main(argv=None):
         text_model=args.text_model, vision_model=args.vision_model, base_url=args.openai_base_url)
     cache = EnrichmentCache(args.cache, version=Enricher.VERSION) if args.cache else None
     enricher = Enricher(backend, anomaly_threshold=args.anomaly_threshold,
-                        article_retriever=retrieve_article, cache=cache)
+                        article_retriever=retrieve_article,
+                        archive_retriever=retrieve_archived_article, cache=cache)
     server = ThreadingHTTPServer((args.host, args.port), handler_class(enricher))
     try: server.serve_forever()
     except KeyboardInterrupt: pass

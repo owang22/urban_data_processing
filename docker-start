@@ -37,8 +37,11 @@ values = {
  "OBSERVATION_MAX_MESSAGE_BYTES": receiver.get("max_message_bytes", 25000000),
  "OBSERVATION_TEXT_MODEL": enrichment.get("text_model", "gpt-4o-mini"),
  "OBSERVATION_VISION_MODEL": enrichment.get("vision_model", "gpt-4o-mini"),
- "OBSERVATION_OPENAI_API_KEY": enrichment.get("openai_api_key", ""),
- "OBSERVATION_GOOGLE_PLACES_API_KEY": enrichment.get("google_places_api_key", ""),
+ # The example config's "replace_me" means no key; passing it on would make
+ # enrichment try Google with it instead of using the OpenStreetMap fallback.
+ "OBSERVATION_OPENAI_API_KEY": "" if enrichment.get("openai_api_key") == "replace_me" else enrichment.get("openai_api_key", ""),
+ "OBSERVATION_GOOGLE_PLACES_API_KEY": "" if enrichment.get("google_places_api_key") == "replace_me" else enrichment.get("google_places_api_key", ""),
+ "OBSERVATION_OPENAI_BUDGET_USD": "" if enrichment.get("openai_budget_usd") is None else enrichment["openai_budget_usd"],
 }
 for key, value in values.items(): print(f"export {key}={shlex.quote(str(value))}")
 PY

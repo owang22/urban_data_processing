@@ -14,6 +14,8 @@ services:
       GOOGLE_PLACES_API_KEY: ${OBSERVATION_GOOGLE_PLACES_API_KEY:-}
       URBAN_ENRICHMENT_ANOMALY_ONLY: ${OBSERVATION_ANOMALY_ONLY:-false}
       URBAN_ENRICHMENT_CACHE: /output/enrichment.sqlite3
+      URBAN_OPENAI_BUDGET_USD: ${OBSERVATION_OPENAI_BUDGET_USD:-}
+      URBAN_OPENAI_USAGE_LEDGER: /output/${OBSERVATION_OPENAI_USAGE_LEDGER:-openai-usage.jsonl}
       HF_HOME: /output/huggingface-cache
     volumes:
       - ${OBSERVATION_OUTPUT_HOST:?Run ./docker-start instead}:/output

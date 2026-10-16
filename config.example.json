@@ -21,7 +21,8 @@
     "text_model": "gpt-4o-mini",
     "vision_model": "gpt-4o-mini",
     "openai_api_key": "replace_me",
-    "google_places_api_key": "replace_me"
+    "google_places_api_key": "replace_me",
+    "openai_budget_usd": 5.0
   },
   "replay": {
     "receiver": {

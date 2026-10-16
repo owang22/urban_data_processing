@@ -17,6 +17,8 @@ from typing import Any
 from replay.catalog import DataCatalog
 from replay.readers import SOURCE_FOLDERS, observations
 
+from .fires import news_fires
+
 # Greater Los Angeles, with the Santa Monica Mountains and Orange County coast.
 BBOX = (33.55, -119.2, 34.85, -117.4)  # south, west, north, east
 
@@ -139,6 +141,7 @@ class Partition:
     signature: tuple
     cameras: dict[str, list[Frame]] = field(default_factory=dict)
     items: list[Item] = field(default_factory=list)
+    fire_articles: list[Item] = field(default_factory=list)  # GDELT articles naming a fire
 
 
 def folder_signature(folder: Path) -> tuple:
@@ -215,13 +218,29 @@ class ExplorerIndex:
                     result.items.append(Item(time, obs.latitude, obs.longitude,
                                              {"station": obs.sensor, **obs.data}))
             elif source == "gdelt":
+                article = self.fire_article(obs, time, seen_urls)
                 item = self.news_item(obs, time, seen_urls)
                 if item is not None:
                     result.items.append(item)
+                if article is not None:
+                    result.fire_articles.append(article)
         for frames in result.cameras.values():
             frames.sort(key=lambda f: f.time)
         result.items.sort(key=lambda i: i.time)
+        result.fire_articles.sort(key=lambda i: i.time)
         return result
+
+    @staticmethod
+    def fire_article(obs, time: datetime, seen_urls: set[str]) -> Item | None:
+        """A GKG article that names a fire, located or not (Henderson is outside the map area)."""
+        url = obs.data.get("url", "")
+        if obs.data.get("kind") != "gkg" or not url or url in seen_urls or not obs.data.get("title"):
+            return None
+        fires = news_fires(obs.data["title"], obs.data.get("body", ""))
+        if not fires:
+            return None
+        domain = url.split("/")[2] if url.count("/") >= 2 else url
+        return Item(time, 0.0, 0.0, {"title": obs.data["title"], "url": url, "domain": domain, "fires": fires})
 
     @staticmethod
     def news_item(obs, time: datetime, seen_urls: set[str]) -> Item | None:
@@ -334,6 +353,25 @@ class ExplorerIndex:
             else:
                 merged[key] = {**item, "outlets": 1}
         return list(merged.values())
+
+    def fire_news(self, keys: set[str], start: datetime, end: datetime) -> dict[str, list[dict[str, Any]]]:
+        """Articles naming each fire, newest first, one per headline."""
+        found: dict[str, list[dict[str, Any]]] = {key: [] for key in keys}
+        titles: dict[str, set[str]] = {key: set() for key in keys}
+        articles = [a for part in self._partitions("gdelt") for a in part.fire_articles if start <= a.time <= end]
+        for article in sorted(articles, key=lambda a: a.time, reverse=True):
+            for named, facts in article.props["fires"].items():
+                # "Malibu Bryson Fire" is the Bryson fire.
+                key = named if named in found else next((k for k in found if named.endswith(" " + k)), None)
+                if key is None:
+                    continue
+                headline = " ".join(article.props["title"].lower().split())
+                if headline in titles[key]:
+                    continue
+                titles[key].add(headline)
+                found[key].append({"time": iso(article.time), "title": article.props["title"],
+                                   "url": article.props["url"], "domain": article.props["domain"], **facts})
+        return found
 
     def _latest_weather(self, at: datetime) -> list[dict[str, Any]]:
         latest: dict[str, Item] = {}

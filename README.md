@@ -201,6 +201,14 @@ localhost. From another machine, forward the port first:
 `ssh -L 8095:localhost:8095 <user>@<server>`. CHP incidents arrive as a daily
 file the next morning, so the current day has none.
 
+The Wildfires layer fetches public feeds every 10 minutes (no keys): CAL FIRE
+incidents, NIFC perimeters and incident points, and NASA FIRMS satellite heat
+detections. Snapshots are kept for 14 days in `processing-output/fire-feeds`,
+so the time slider shows each fire as it stood. A fire's popup lists the GDELT
+articles that name it, the acreage and containment the newest article reports,
+and the AlertCalifornia cameras whose view covers it. Link to a fire with
+`#fire-<name>`, e.g. `http://127.0.0.1:8095/#fire-bryson`.
+
 ## Verify changes
 
 ```bash

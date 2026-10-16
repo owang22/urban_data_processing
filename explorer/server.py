@@ -2,7 +2,9 @@
 
     python -m explorer.server [--port 8095] [--host 127.0.0.1] [--days 3]
 
-Read-only: it reads the collectors' raw data folder and never writes to it.
+Read-only toward the collectors' raw data folder. It fetches public wildfire
+feeds (CAL FIRE, NIFC, NASA FIRMS) every 10 minutes and keeps snapshots in
+processing-output/fire-feeds.
 Binds to localhost by default; reach it from another machine with
     ssh -L 8095:localhost:8095 <user>@<this machine>
 """
@@ -18,13 +20,14 @@ import threading
 import time
 from urllib.parse import parse_qs, urlparse
 
+from .fires import FireFeeds
 from .index import ExplorerIndex, SOURCES, parse_time
 
 STATIC = Path(__file__).with_name("static")
 REPOSITORY = Path(__file__).parents[1]
 
 
-def make_handler(index: ExplorerIndex):
+def make_handler(index: ExplorerIndex, fires: FireFeeds):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(STATIC), **kwargs)
@@ -51,6 +54,14 @@ def make_handler(index: ExplorerIndex):
                     at = parse_time(query["at"]) if query.get("at") else datetime.now(timezone.utc)
                     hours = min(max(float(query.get("hours", 3)), 0.25), 72)
                     return self.send_json(index.snapshot(at, hours))
+                if url.path == "/api/fires":
+                    at = parse_time(query["at"]) if query.get("at") else datetime.now(timezone.utc)
+                    hours = min(max(float(query.get("hours", 24)), 1), 72)
+                    result = fires.snapshot(at)
+                    news = index.fire_news({f["key"] for f in result["fires"]}, at - timedelta(hours=hours), at)
+                    for fire in result["fires"]:
+                        fire["news"] = news.get(fire["key"], [])[:25]
+                    return self.send_json(result)
                 if url.path == "/api/frames":
                     if query.get("source") not in ("alertcalifornia", "cctv"):
                         return self.send_json({"error": "unknown source"}, 400)
@@ -89,6 +100,18 @@ def refresh_forever(index: ExplorerIndex, interval: float) -> None:
             print(f"index refresh failed: {exc!r}", flush=True)
 
 
+def fetch_fires_forever(fires: FireFeeds, interval: float) -> None:
+    while True:
+        try:
+            statuses = fires.fetch()
+            errors = {k: v for k, v in statuses.items() if v.startswith("error")}
+            print(f"fire feeds: {sum(v == 'saved' for v in statuses.values())} updated"
+                  + (f", errors: {errors}" if errors else ""), flush=True)
+        except Exception as exc:
+            print(f"fire feed fetch failed: {exc!r}", flush=True)
+        time.sleep(interval)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
@@ -96,6 +119,9 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=3, help="most recent days of each source to load")
     parser.add_argument("--refresh-seconds", type=float, default=60)
     parser.add_argument("--data-root", help="defaults to paths.data_root in config.json")
+    parser.add_argument("--fire-cache", default=str(REPOSITORY / "processing-output" / "fire-feeds"),
+                        help="where fetched fire feed snapshots are kept (14 days)")
+    parser.add_argument("--fire-seconds", type=float, default=600, help="how often to fetch the fire feeds")
     args = parser.parse_args()
 
     data_root = args.data_root
@@ -110,7 +136,9 @@ def main() -> None:
     print(f"loading {', '.join(SOURCES)} from {data_root} ...", flush=True)
     index.refresh()
     threading.Thread(target=refresh_forever, args=(index, args.refresh_seconds), daemon=True).start()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(index))
+    fires = FireFeeds(args.fire_cache)
+    threading.Thread(target=fetch_fires_forever, args=(fires, args.fire_seconds), daemon=True).start()
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(index, fires))
     print(f"explorer on http://{args.host}:{args.port}", flush=True)
     server.serve_forever()
 

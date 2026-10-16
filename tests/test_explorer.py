@@ -70,3 +70,34 @@ def test_merge_copies_counts_outlets():
             {"kind": "events", "title": "Assault (c.com)", "domain": "c.com", "url": "https://c.com/1"}]
     merged = ExplorerIndex.merge_copies(news)
     assert [(n["domain"], n["outlets"]) for n in merged] == [("a.com", 2), ("c.com", 1)]
+
+
+def test_news_fires_reads_largest_acreage_and_skips_comparisons():
+    from explorer.fires import news_fires
+    found = news_fires("Bryson Fire grows",
+                       "The Bryson Fire was reported at two acres. The Bryson fire grew to 101.5 acres. "
+                       "The Bryson Fire is at about 20 percent containment. "
+                       "The Bryson and Peak fires together burned 500 acres. The Peak Fire burned 43 acres.")
+    assert found["bryson"] == {"acres": 101.5, "contained": 20}
+    assert found["peak"] == {"acres": 43.0}
+
+
+def test_fire_snapshot_merges_feeds_as_of_time(tmp_path):
+    from explorer.fires import FireFeeds
+    feeds = FireFeeds(tmp_path)
+    (tmp_path / "calfire").mkdir()
+    (tmp_path / "calfire" / "20261016T120000Z.json").write_text(json.dumps([
+        {"Name": "Bryson Fire ", "Latitude": 34.09, "Longitude": -118.84, "AcresBurned": 147, "PercentContained": 17,
+         "Started": "2026-10-16T00:00:49Z", "Url": "https://www.fire.ca.gov/x"},
+        {"Name": "Far Fire", "Latitude": 40.0, "Longitude": -121.0, "AcresBurned": 9, "Started": "2026-10-16T00:00:00Z"}]))
+    (tmp_path / "incidents").mkdir()
+    (tmp_path / "incidents" / "20261016T120000Z.geojson").write_text(json.dumps({"features": [
+        {"properties": {"IncidentName": "BRYSON", "IncidentSize": 200, "FireDiscoveryDateTime": 1792107679000},
+         "geometry": {"coordinates": [-118.84, 34.09]}},
+        {"properties": {"IncidentName": "AVA", "IncidentSize": None, "FireDiscoveryDateTime": 1792107679000},
+         "geometry": {"coordinates": [-118.76, 34.14]}}]}))
+    at = datetime(2026, 10, 16, 13, tzinfo=timezone.utc)
+    fires = {f["key"]: f for f in feeds.snapshot(at)["fires"]}
+    assert set(fires) == {"bryson", "ava"}
+    assert fires["bryson"]["acres"] == 147 and fires["bryson"]["source"] == "CAL FIRE"
+    assert feeds.snapshot(datetime(2026, 10, 16, 11, tzinfo=timezone.utc))["fires"] == []

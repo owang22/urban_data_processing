@@ -28,6 +28,8 @@ L.control.layers(base, null, { position: "topleft" }).addTo(map);
 L.control.scale({ imperial: true, metric: true }).addTo(map);
 
 const LAYERS = [
+  { key: "fires", label: "Wildfires", color: "--fire",
+    note: "CAL FIRE and NIFC incidents, mapped perimeters, and NASA satellite heat detections (last 24 h; some are industrial sites)." },
   { key: "alertcalifornia", label: "AlertCalifornia cameras", color: "--ac",
     note: "Wedge = view direction and field of view. Red = re-aimed in this window." },
   { key: "cctv", label: "Caltrans CCTV", color: "--cctv" },
@@ -78,7 +80,8 @@ const ray = (lat, lon, bearing, km) => wedge(lat, lon, bearing, 1, km).slice(0, 
 
 let range = null;       // {start, end} across sources, ms
 let snapshot = null;
-let tab = "news";
+let fireData = { fires: [], perimeters: [], hotspots: [] };
+let tab = "fires";
 const markers = {};     // id -> marker, for the list
 
 function selectedTime() {
@@ -111,8 +114,12 @@ async function loadSnapshot() {
   const at = selectedTime();
   $("clock").textContent = fmtTime(at.toISOString());
   const hours = $("window").value;
+  const atParam = encodeURIComponent(at.toISOString());
   try {
-    snapshot = await getJSON(`/api/snapshot?at=${encodeURIComponent(at.toISOString())}&hours=${hours}`);
+    [snapshot, fireData] = await Promise.all([
+      getJSON(`/api/snapshot?at=${atParam}&hours=${hours}`),
+      getJSON(`/api/fires?at=${atParam}&hours=${Math.max(hours, 24)}`).catch(() => fireData),
+    ]);
   } catch (err) {
     $("status").textContent = `Could not load data: ${err.message}`;
     return;
@@ -185,10 +192,98 @@ function draw() {
       .addTo(groups.weather);
   }
 
-  const counts = { alertcalifornia: s.alertcalifornia.length, cctv: s.cctv.length, incidents: s.incidents.length,
+  drawFires(at);
+
+  const counts = { fires: fireData.fires.filter((f) => !f.minor).length, alertcalifornia: s.alertcalifornia.length, cctv: s.cctv.length, incidents: s.incidents.length,
     news: news.length, weather: s.weather.length };
   for (const [k, v] of Object.entries(counts)) $(`count-${k}`).textContent = v;
   drawList();
+}
+
+// ---- wildfires ----------------------------------------------------------------
+
+const toRad = (d) => (d * Math.PI) / 180;
+function distanceKm(a, b) {
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+}
+function bearingTo(a, b) {
+  const y = Math.sin(toRad(b.lon - a.lon)) * Math.cos(toRad(b.lat));
+  const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) - Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lon - a.lon));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+// AlertCalifornia cameras whose current view wedge covers the fire.
+function camerasOn(fire) {
+  return snapshot.alertcalifornia.filter((c) => {
+    if (c.bearing == null) return false;
+    const km = distanceKm(c, fire);
+    if (km > 40) return false;
+    const off = Math.abs(((bearingTo(c, fire) - c.bearing + 540) % 360) - 180);
+    return km < 0.5 || off <= (c.fov || 60) / 2 + 3;
+  }).map((c) => ({ name: c.name, km: distanceKm(c, fire) })).sort((a, b) => a.km - b.km);
+}
+const fmtAcres = (a) => (a == null ? "size unknown" : `${Number(a).toLocaleString("en-US", { maximumFractionDigits: 1 })} acres`);
+const fmtContained = (c) => (c == null ? "" : ` · ${c}% contained`);
+
+function newsFacts(fire) {
+  const a = fire.news.find((n) => n.acres != null || n.contained != null);
+  return a ? { ...a } : null;
+}
+
+function drawFires(at) {
+  const g = groups.fires, fireColor = css("--fire");
+  L.geoJSON({ type: "FeatureCollection", features: fireData.perimeters }, {
+    style: { color: fireColor, weight: 2, fillColor: fireColor, fillOpacity: 0.3 },
+  }).bindPopup((layer) => {
+    const p = layer.feature.properties;
+    return `<div class="pop"><h3>${esc(p.name)} Fire perimeter</h3><div class="m">${fmtAcres(p.acres)} mapped${p.mapped ? ` · ${fmtTime(p.mapped)}` : ""}</div>
+      ${p.behavior ? `<div class="m">Behavior: ${esc(p.behavior)}</div>` : ""}${p.personnel ? `<div class="m">${p.personnel} personnel</div>` : ""}</div>`;
+  }).addTo(g);
+  for (const h of fireData.hotspots) {
+    L.circleMarker([h.lat, h.lon], { radius: 3, color: css("--hot"), weight: 1, fillColor: css("--hot"), fillOpacity: 0.85 })
+      .bindPopup(`<div class="pop"><h3>Satellite heat detection</h3><div class="m">${fmtTime(h.time)} · ${esc(h.satellite)} VIIRS · confidence ${esc(h.confidence)} · ${esc(h.frp)} MW</div></div>`)
+      .addTo(g);
+  }
+  for (const f of fireData.fires) {
+    const out = f.contained >= 100;
+    const size = f.minor ? 10 : Math.round(18 + Math.min(Math.log10((f.acres || 1) + 1), 4) * 5);
+    const icon = L.divIcon({ className: "", iconSize: [size, size], iconAnchor: [size / 2, size - 2],
+      html: `<span class="flame${out ? " out" : ""}${f.minor ? " minor" : ""}" style="width:${size}px;height:${size}px"></span>` });
+    const m = L.marker([f.lat, f.lon], { icon, zIndexOffset: f.minor ? 0 : 1000, title: f.name })
+      .bindPopup(() => firePopup(f), { maxWidth: 380, minWidth: 300 })
+      .addTo(g);
+    markers[`fire:${f.key}`] = m;
+    if (!f.minor && !out) {
+      L.marker([f.lat, f.lon], { interactive: false, icon: L.divIcon({ className: "", iconAnchor: [-size / 2, size / 2 + 4],
+        html: `<span class="fire-label">${esc(f.name.replace(/ Fire$/, ""))}</span>` }) }).addTo(g);
+    }
+  }
+}
+
+function firePopup(f) {
+  const el = document.createElement("div");
+  el.className = "pop";
+  const facts = newsFacts(f);
+  const cams = camerasOn(f);
+  el.innerHTML = `<h3>${f.url ? `<a href="${safeUrl(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>` : esc(f.name)}</h3>
+    <div class="m">${esc([f.county && `${f.county} County`, f.location].filter(Boolean).join(" · "))}</div>
+    <div class="facts"><b>${fmtAcres(f.acres)}${fmtContained(f.contained)}</b>
+      <span class="m">${esc(f.source)}${f.updated ? `, updated ${fmtTime(f.updated)}` : ""}${f.started ? ` · started ${fmtTime(f.started)}` : ""}</span></div>
+    ${facts ? `<div class="facts"><b>Per news: ${facts.acres != null ? fmtAcres(facts.acres) : ""}${facts.contained != null ? `${facts.acres != null ? " · " : ""}${facts.contained}% contained` : ""}</b>
+      <span class="m">${esc(facts.domain)}, ${fmtTime(facts.time)}</span></div>` : ""}
+    ${cams.length ? `<div class="sub">Cameras facing it</div><div class="cams">${cams.slice(0, 8).map((c) =>
+      `<button type="button" data-cam="${esc(c.name)}">${esc(c.name)} <span class="m">${c.km.toFixed(1)} km</span></button>`).join("")}</div>` : ""}
+    <div class="sub">In the news (${f.news.length})</div>
+    ${f.news.length ? `<ul class="articles">${f.news.slice(0, 8).map((n) =>
+      `<li><a href="${safeUrl(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a> <span class="m">${esc(n.domain)} · ${fmtTime(n.time)}</span></li>`).join("")}</ul>`
+      : `<div class="m">No collected articles name this fire.</div>`}`;
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-cam]");
+    const m = b && markers[`ac:${b.dataset.cam}`];
+    if (m) { map.setView(m.getLatLng(), Math.max(map.getZoom(), 12)); m.openPopup(); }
+  });
+  return el;
 }
 
 function drawList() {
@@ -196,7 +291,12 @@ function drawList() {
   const list = $("list");
   $("alertFilter").hidden = tab !== "news";
   let rows = [];
-  if (tab === "news") {
+  if (tab === "fires") {
+    rows = fireData.fires.filter((f) => !f.minor)
+      .sort((a, b) => (a.contained >= 100) - (b.contained >= 100) || b.news.length - a.news.length || (b.acres || 0) - (a.acres || 0))
+      .map((f) => ({ id: `fire:${f.key}`, t: f.name,
+        m: `${fmtAcres(f.acres)}${fmtContained(f.contained)} · ${f.news.length} articles · ${camerasOn(f).length} cameras facing${f.county ? ` · ${f.county}` : ""}` }));
+  } else if (tab === "news") {
     rows = s.news.filter((n) => !$("alertsOnly").checked || n.alert)
       .map((n) => ({ id: n.id, t: n.title,
         m: `${fmtTime(n.time)} · ${n.place} · ${n.outlets > 1 ? `${n.outlets} outlets` : n.domain}${n.categories.length ? ` · ${n.categories.join(", ")}` : ""}` }));
@@ -287,6 +387,9 @@ document.querySelector(".tabs").addEventListener("click", (e) => {
 (async function start() {
   try { await loadRange(); } catch (err) { $("status").textContent = `Could not reach the server: ${err.message}`; }
   await loadSnapshot();
+  const wanted = /^#fire-([a-z0-9-]+)$/.exec(location.hash);
+  const target = wanted && markers[`fire:${wanted[1].replace(/-/g, " ")}`];
+  if (target) { map.setView(target.getLatLng(), 12); target.openPopup(); }
   setInterval(async () => {
     if (!$("live").checked) return;
     try { await loadRange(); } catch { /* keep the last view */ }

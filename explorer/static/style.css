@@ -1,7 +1,7 @@
 :root {
   --bg: #f6f4ef; --panel: #fffdf8; --fg: #1f2420; --muted: #66706a; --line: #ddd8cc;
   --accent: #c2410c; --ac: #ea7a1a; --reaim: #d6203a; --cctv: #2563a8; --chp: #b91c1c;
-  --news: #6d3fb5; --news-alert: #a3165f; --weather: #0f766e;
+  --news: #6d3fb5; --fire: #e0301e; --hot: #f59e0b; --news-alert: #a3165f; --weather: #0f766e;
   --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -9,6 +9,7 @@
     --accent: #f08a4b; --cctv: #6ea8e8; --news: #a888e6; --news-alert: #e0679f; --weather: #3fbfb2; color-scheme: dark; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); display: flex; }
 #map { flex: 1; min-width: 0; height: 100%; }
@@ -49,6 +50,17 @@ select { font: inherit; padding: 2px 4px; background: var(--panel); color: var(-
 .pop .scrub button { font: inherit; padding: 1px 8px; cursor: pointer; }
 .pop a { overflow-wrap: anywhere; }
 .dot { display: block; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.flame { display: block; background: var(--fire); border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+  border-radius: 50% 0 50% 50%; transform: rotate(-45deg); }
+.flame.out { background: #8a8f8b; }
+.flame.minor { border-width: 1px; opacity: .8; }
+.fire-label { background: var(--fire); color: #fff; font: 700 11px/1.6 var(--font); padding: 0 6px; border-radius: 3px; white-space: nowrap; }
+.pop .facts { margin-top: 6px; display: grid; }
+.pop .sub { margin-top: 8px; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #5c645e; }
+.pop .cams { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.pop .cams button { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid #ccc; border-radius: 3px; background: #f7f5f0; cursor: pointer; }
+.pop .articles { margin: 4px 0 0; padding-left: 16px; max-height: 180px; overflow-y: auto; }
+.pop .articles li { margin-bottom: 4px; }
 .wx { background: rgba(255,255,255,.92); color: #0f3d39; border: 1px solid #0f766e; border-radius: 10px;
   padding: 1px 6px; font: 600 11px/1.5 var(--font); white-space: nowrap; display: inline-flex; gap: 3px; align-items: center; }
 .wx i { display: inline-block; font-style: normal; }

@@ -209,6 +209,11 @@ articles that name it, the acreage and containment the newest article reports,
 and the AlertCalifornia cameras whose view covers it. Link to a fire with
 `#fire-<name>`, e.g. `http://127.0.0.1:8095/#fire-bryson`.
 
+To share a moment without the server, export a self-contained page (basemap,
+camera thumbnails and fire time-lapses embedded, about 6 MB) while the
+explorer is running: `python3 explorer/export.py --out fire-desk.html`.
+It needs Pillow; the system Python has it.
+
 ## Verify changes
 
 ```bash

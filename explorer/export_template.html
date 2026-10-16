@@ -1,0 +1,382 @@
+<title>LA Fire Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+/*LEAFLET_CSS*/
+/* Layout: one-screen app. Map fills the left; an incident board on the right
+   (stacked below the map on phones). Fire red is reserved for fires. */
+:root {
+  --bg: #e9edeb; --panel: #f8faf9; --fg: #18201d; --muted: #5d6a64; --line: #d3dbd7;
+  --fire: #d42a1b; --fire-ink: #ffffff; --ember: #ef9a0c; --ac: #e07a10; --reaim: #b3123a;
+  --cctv: #2a62a6; --news: #6a3fb0; --chp: #7a1f12; --wx: #0f6e66; --chip: #e2e8e5;
+  --display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --map-filter: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101513; --panel: #171e1b; --fg: #e5ebe8; --muted: #94a39c; --line: #2b3632; --chip: #24302b;
+    --fire: #ff4a35; --ember: #ffb02e; --ac: #f59331; --reaim: #ff5c7f; --cctv: #6fa6e8; --news: #ad8cf0;
+    --chp: #e0705f; --wx: #46c2b6; --map-filter: brightness(.72) contrast(1.08) saturate(.85); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101513; --panel: #171e1b; --fg: #e5ebe8; --muted: #94a39c; --line: #2b3632; --chip: #24302b;
+  --fire: #ff4a35; --ember: #ffb02e; --ac: #f59331; --reaim: #ff5c7f; --cctv: #6fa6e8; --news: #ad8cf0;
+  --chp: #e0705f; --wx: #46c2b6; --map-filter: brightness(.72) contrast(1.08) saturate(.85); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--body); display: flex; flex-direction: column; }
+header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+h1 { font: 700 22px/1.1 var(--display); margin: 0; letter-spacing: .01em; text-transform: uppercase; }
+.stamp { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.firestrip { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.firechip { font: 600 14px/1 var(--display); display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border-radius: 3px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); cursor: pointer; }
+.firechip b { color: var(--fire); }
+.firechip .n { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.firechip:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+main { flex: 1; display: flex; min-height: 0; }
+#map { flex: 1; min-width: 0; background: var(--bg); }
+.leaflet-image-layer { filter: var(--map-filter); }
+aside { width: 380px; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); }
+aside > section { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.label { font: 600 12px/1.2 var(--display); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+.layers { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.layers label { display: flex; align-items: center; gap: 7px; font-size: 14px; cursor: pointer; }
+.sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.feed { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; border-bottom: 0 !important; }
+.tabs { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.tabs button { flex: 1; font: 600 14px/1 var(--display); padding: 8px 4px; border: 0; background: transparent; color: var(--muted); cursor: pointer; text-transform: uppercase; letter-spacing: .04em; }
+.tabs button + button { border-left: 1px solid var(--line); }
+.tabs button[aria-selected="true"] { background: var(--fg); color: var(--panel); }
+.controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.controls label { display: flex; align-items: center; gap: 6px; }
+select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; }
+#list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+#list li { padding: 9px 0; border-bottom: 1px solid var(--line); cursor: pointer; display: grid; gap: 2px; }
+#list li:hover .t { text-decoration: underline; }
+#list .t { font-weight: 600; overflow-wrap: anywhere; }
+#list .m { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+#list .empty { color: var(--muted); cursor: default; }
+.tag { display: inline-block; font: 600 11px/1.5 var(--display); text-transform: uppercase; letter-spacing: .05em; padding: 0 5px; border-radius: 2px; background: var(--chip); color: var(--muted); margin-right: 4px; }
+.tag.hot { background: var(--fire); color: var(--fire-ink); }
+footer.src { padding: 8px 16px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+footer.src a { color: inherit; }
+
+/* map marks */
+.flame { display: block; background: var(--fire); border: 2px solid var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.45);
+  border-radius: 50% 0 50% 50%; transform: rotate(-45deg); }
+.flame.out { background: var(--muted); }
+.flame.minor { border-width: 1px; opacity: .85; }
+.fire-label { background: var(--fire); color: var(--fire-ink); font: 700 12px/1.6 var(--display); padding: 0 6px; border-radius: 2px; white-space: nowrap; text-transform: uppercase; letter-spacing: .04em; }
+.newsdot { display: grid; place-items: center; border-radius: 50%; background: var(--news); color: #fff; border: 1.5px solid var(--panel);
+  font: 700 11px/1 var(--display); box-shadow: 0 1px 2px rgba(0,0,0,.35); }
+.wxl { background: var(--panel); color: var(--wx); border: 1px solid var(--wx); border-radius: 10px; padding: 1px 6px;
+  font: 600 12px/1.5 var(--display); white-space: nowrap; display: inline-flex; gap: 3px; align-items: center; }
+.wxl i { display: inline-block; font-style: normal; }
+.leaflet-container { font: 14px/1.4 var(--body); background: var(--bg); }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--fg); border-radius: 4px; }
+.leaflet-popup-content { margin: 12px 14px; }
+.leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+.leaflet-control-zoom a, .leaflet-control-attribution { background: var(--panel) !important; color: var(--fg) !important; }
+.leaflet-control-attribution a { color: var(--fg) !important; }
+.pop h3 { font: 700 18px/1.15 var(--display); margin: 0 0 2px; }
+.pop h3 a { color: inherit; }
+.pop .m { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pop .fig { margin-top: 8px; display: grid; gap: 1px; }
+.pop .fig b { font: 700 16px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+.pop .sub { margin-top: 10px; font: 600 12px/1.2 var(--display); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.pop img { display: block; width: 100%; margin-top: 6px; border-radius: 2px; aspect-ratio: 16 / 9; object-fit: cover; background: var(--chip); }
+.pop .player { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.pop .player input { flex: 1; min-width: 0; accent-color: var(--fire); }
+.pop .player button, .pop .cams button { font: 600 13px/1 var(--display); padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--chip); color: var(--fg); cursor: pointer; }
+.pop .cams { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.pop ul { margin: 4px 0 0; padding-left: 16px; max-height: 170px; overflow-y: auto; }
+.pop li { margin-bottom: 4px; }
+.pop a { color: var(--cctv); overflow-wrap: anywhere; }
+
+@media (max-width: 800px) {
+  main { flex-direction: column; }
+  #map { flex: none; height: 52vh; }
+  aside { width: 100%; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
+  .firestrip { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<header class="top">
+  <div>
+    <h1>LA Fire Desk</h1>
+    <div class="stamp" id="stamp"></div>
+  </div>
+  <div class="firestrip" id="firestrip" aria-label="Active fires"></div>
+</header>
+<main>
+  <div id="map" role="region" aria-label="Map of Los Angeles fires, cameras and news"></div>
+  <aside>
+    <section>
+      <p class="label">Layers</p>
+      <div class="layers" id="layers"></div>
+    </section>
+    <section class="feed">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-fires" data-tab="fires" aria-selected="true">Fires</button>
+        <button role="tab" id="tab-news" data-tab="news" aria-selected="false">News</button>
+        <button role="tab" id="tab-chp" data-tab="chp" aria-selected="false">CHP</button>
+        <button role="tab" id="tab-cams" data-tab="cams" aria-selected="false">Re-aimed</button>
+      </div>
+      <div class="controls" id="newsControls" hidden>
+        <label><input type="checkbox" id="emergencyOnly" checked> Emergency-related only</label>
+        <label>Last <select id="newsHours"><option value="3">3 h</option><option value="6" selected>6 h</option><option value="12">12 h</option><option value="24">24 h</option></select></label>
+      </div>
+      <ol id="list"></ol>
+    </section>
+    <footer class="src" id="sources"></footer>
+  </aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script id="data" type="application/json">{{DATA}}</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const TZ = "America/Los_Angeles";
+const $ = (id) => document.getElementById(id);
+const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? esc(u) : "#");
+const fmt = (iso, day = true) => new Date(iso).toLocaleString("en-US", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false, ...(day ? { month: "short", day: "numeric" } : {}) });
+const acres = (a) => (a == null ? "size unknown" : `${Number(a).toLocaleString("en-US", { maximumFractionDigits: 1 })} acres`);
+const generated = new Date(D.generated);
+
+$("stamp").textContent = `Snapshot ${fmt(D.generated)} Los Angeles time · not live`;
+$("sources").innerHTML = `Sources: CAL FIRE, NIFC, NASA FIRMS, ALERTCalifornia, Caltrans, GDELT, CHP via PeMS, OpenWeather. Basemap © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.`;
+
+// ---- map ----
+const map = L.map("map", { zoomSnap: 0.5, minZoom: 8.5, maxZoom: 14, attributionControl: true });
+map.attributionControl.setPrefix(false).addAttribution("© OpenStreetMap contributors");
+for (const b of D.basemaps) L.imageOverlay(b.image, b.bounds, { interactive: false }).addTo(map);
+const outer = D.basemaps[0].bounds;
+map.setMaxBounds(L.latLngBounds(outer).pad(0.05));
+map.setView([34.05, -118.55], 10);
+
+const LAYERS = [
+  ["fires", "Wildfires", "--fire", true], ["ac", "Fire cameras", "--ac", true], ["cctv", "Caltrans CCTV", "--cctv", false],
+  ["news", "News", "--news", true], ["chp", "CHP (prior day)", "--chp", false], ["wx", "Weather", "--wx", true],
+];
+const G = {};
+for (const [key, label, color, on] of LAYERS) {
+  G[key] = L.layerGroup();
+  if (on) G[key].addTo(map);
+  const el = document.createElement("label");
+  el.innerHTML = `<input type="checkbox" id="layer-${key}" ${on ? "checked" : ""}><span class="sw" style="background:var(${color})"></span>${label}`;
+  el.querySelector("input").addEventListener("change", (e) => (e.target.checked ? G[key].addTo(map) : map.removeLayer(G[key])));
+  $("layers").append(el);
+}
+
+const rad = (d) => (d * Math.PI) / 180;
+function km(a, b) {
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lon - a.lon) / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+}
+function bearingTo(a, b) {
+  const y = Math.sin(rad(b.lon - a.lon)) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lon - a.lon));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+function wedge(lat, lon, bearing, fov, dist) {
+  const pts = [[lat, lon]], half = Math.max(Math.min(fov || 60, 120) / 2, 0.5);
+  for (let a = bearing - half; a <= bearing + half + 0.01; a += half / 6) {
+    pts.push([lat + (dist / 111) * Math.cos(rad(a)), lon + (dist / (111 * Math.cos(rad(lat)))) * Math.sin(rad(a))]);
+  }
+  pts.push([lat, lon]);
+  return pts;
+}
+const ACS = D.cameras.filter((c) => c.source === "alertcalifornia");
+function camerasOn(f) {
+  return ACS.filter((c) => c.bearing != null && km(c, f) <= 40 &&
+    Math.abs(((bearingTo(c, f) - c.bearing + 540) % 360) - 180) <= (c.fov || 60) / 2 + 3)
+    .map((c) => ({ c, d: km(c, f) })).sort((a, b) => a.d - b.d);
+}
+
+const markers = {};
+const fires = D.fires.fires;
+const major = fires.filter((f) => !f.minor).sort((a, b) => (a.contained >= 100) - (b.contained >= 100) || b.news.length - a.news.length || (b.acres || 0) - (a.acres || 0));
+
+// ---- fires ----
+L.geoJSON({ type: "FeatureCollection", features: D.fires.perimeters }, {
+  style: () => ({ color: tok("--fire"), weight: 2, fillColor: tok("--fire"), fillOpacity: 0.32 }),
+}).bindPopup((layer) => {
+  const p = layer.feature.properties;
+  return `<div class="pop"><h3>${esc(p.name)} perimeter</h3><div class="m">${acres(p.acres)} mapped${p.mapped ? ` · ${fmt(p.mapped)}` : ""}</div>${p.behavior ? `<div class="m">Fire behavior: ${esc(p.behavior)}</div>` : ""}${p.personnel ? `<div class="m">${p.personnel} personnel assigned</div>` : ""}</div>`;
+}).addTo(G.fires);
+for (const h of D.fires.hotspots) {
+  L.circleMarker([h.lat, h.lon], { radius: 3.5, color: tok("--ember"), weight: 1, fillColor: tok("--ember"), fillOpacity: 0.9 })
+    .bindPopup(`<div class="pop"><h3>Satellite heat detection</h3><div class="m">${fmt(h.time)} · ${esc(h.satellite)} VIIRS · ${esc(h.frp)} MW · confidence ${esc(h.confidence)}</div><div class="m">Some detections are refineries or other industrial heat.</div></div>`)
+    .addTo(G.fires);
+}
+for (const f of fires) {
+  const out = f.contained >= 100;
+  const size = f.minor ? 10 : Math.round(18 + Math.min(Math.log10((f.acres || 1) + 1), 4) * 5);
+  const m = L.marker([f.lat, f.lon], { zIndexOffset: f.minor ? 0 : 1000, title: f.name, icon: L.divIcon({ className: "", iconSize: [size, size], iconAnchor: [size / 2, size - 2],
+    html: `<span class="flame${out ? " out" : ""}${f.minor ? " minor" : ""}" style="width:${size}px;height:${size}px"></span>` }) })
+    .bindPopup(() => firePopup(f), { maxWidth: 400, minWidth: 290, autoPanPadding: [20, 20] }).addTo(G.fires);
+  markers[`fire:${f.key}`] = m;
+  if (!f.minor && !out) {
+    L.marker([f.lat, f.lon], { interactive: false, icon: L.divIcon({ className: "", iconAnchor: [-size / 2, size / 2 + 4], html: `<span class="fire-label">${esc(f.name.replace(/ Fire$/, ""))}</span>` }) }).addTo(G.fires);
+  }
+}
+
+function player(el, frames, camName) {
+  const img = el.querySelector("img"), range = el.querySelector(".player input"), btn = el.querySelector(".player button"), info = el.querySelector(".frameinfo");
+  let timer = null;
+  const show = (i) => {
+    const f = frames[i];
+    img.src = f.thumb;
+    info.textContent = `${camName} · ${fmt(f.time)}${f.bearing != null ? ` · facing ${Math.round(f.bearing)}°` : ""} · ${i + 1} of ${frames.length}`;
+  };
+  range.max = frames.length - 1; range.value = frames.length - 1; show(frames.length - 1);
+  range.addEventListener("input", () => show(Number(range.value)));
+  btn.addEventListener("click", () => {
+    if (timer) { clearInterval(timer); timer = null; btn.textContent = "Play"; return; }
+    if (Number(range.value) >= frames.length - 1) range.value = 0;
+    btn.textContent = "Pause";
+    timer = setInterval(() => {
+      const i = Number(range.value) + 1;
+      if (i >= frames.length) { clearInterval(timer); timer = null; btn.textContent = "Play"; return; }
+      range.value = i; show(i);
+    }, 350);
+  });
+  map.once("popupclose", () => timer && clearInterval(timer));
+}
+const playerHtml = (label) => `<img alt="${esc(label)}"><div class="m frameinfo"></div><div class="player"><button type="button">Play</button><input type="range" min="0" value="0" aria-label="Frame time"></div>`;
+
+function firePopup(f) {
+  const el = document.createElement("div");
+  el.className = "pop";
+  const facts = f.news.find((n) => n.acres != null || n.contained != null);
+  const cams = camerasOn(f);
+  const seqCam = cams.find(({ c }) => D.sequences[c.name]);
+  el.innerHTML = `<h3>${f.url ? `<a href="${safeUrl(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>` : esc(f.name)}</h3>
+    <div class="m">${esc([f.county && `${f.county} County`, f.location].filter(Boolean).join(" · "))}</div>
+    <div class="fig"><b>${acres(f.acres)}${f.contained != null ? ` · ${f.contained}% contained` : ""}</b><span class="m">${esc(f.source)}${f.updated ? `, updated ${fmt(f.updated)}` : ""}${f.started ? ` · started ${fmt(f.started)}` : ""}</span></div>
+    ${facts ? `<div class="fig"><b>Per news: ${facts.acres != null ? acres(facts.acres) : ""}${facts.contained != null ? `${facts.acres != null ? " · " : ""}${facts.contained}% contained` : ""}</b><span class="m">${esc(facts.domain)}, ${fmt(facts.time)}</span></div>` : ""}
+    ${seqCam ? `<div class="sub">Camera view since the fire started</div>${playerHtml(seqCam.c.name)}` : ""}
+    ${cams.length ? `<div class="sub">Cameras facing it</div><div class="cams">${cams.slice(0, 8).map(({ c, d }) => `<button type="button" data-cam="${esc(c.name)}">${esc(c.name)} · ${d.toFixed(1)} km</button>`).join("")}</div>` : ""}
+    <div class="sub">In the news (${f.news.length})</div>
+    ${f.news.length ? `<ul>${f.news.slice(0, 10).map((n) => `<li><a href="${safeUrl(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a> <span class="m">${esc(n.domain)} · ${fmt(n.time)}</span></li>`).join("")}</ul>` : `<div class="m">No collected articles name this fire.</div>`}`;
+  if (seqCam) player(el, D.sequences[seqCam.c.name], seqCam.c.name);
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-cam]");
+    const m = b && markers[`cam:${b.dataset.cam}`];
+    if (m) { if (!map.hasLayer(G.ac)) { G.ac.addTo(map); $("layer-ac").checked = true; } map.setView(m.getLatLng(), Math.max(map.getZoom(), 12)); m.openPopup(); }
+  });
+  return el;
+}
+
+// ---- cameras ----
+for (const c of D.cameras) {
+  const isAc = c.source === "alertcalifornia";
+  const color = isAc ? (c.reaimed ? tok("--reaim") : tok("--ac")) : tok("--cctv");
+  const g = isAc ? G.ac : G.cctv;
+  if (isAc && c.bearing != null) {
+    L.polygon(wedge(c.lat, c.lon, c.bearing, c.fov, 4), { color, weight: c.reaimed ? 2 : 1, fillColor: color, fillOpacity: 0.14, interactive: false }).addTo(g);
+  }
+  const m = L.circleMarker([c.lat, c.lon], { radius: isAc ? 5 : 3.5, color: tok("--panel"), weight: 1.5, fillColor: color, fillOpacity: 1 })
+    .bindPopup(() => {
+      const el = document.createElement("div");
+      el.className = "pop";
+      const seq = D.sequences[c.name];
+      const pointing = c.bearing != null ? ` · facing ${Math.round(c.bearing)}°${c.reaimed ? " · re-aimed" : ""}` : "";
+      el.innerHTML = `<h3>${esc(c.name)}</h3><div class="m">${isAc ? "ALERTCalifornia" : "Caltrans CCTV"} · ${fmt(c.time)}${pointing}</div>` +
+        (seq ? `<div class="sub">Every 30 minutes since the fire started</div>${playerHtml(c.name)}` : `<img alt="Frame from ${esc(c.name)}" src="${c.thumb}">`);
+      if (seq) player(el, seq, c.name);
+      return el;
+    }, { maxWidth: 380, minWidth: 280 }).addTo(g);
+  markers[`cam:${c.name}`] = m;
+}
+
+// ---- news, grouped by place ----
+let newsMarkers = [];
+function newsInWindow() {
+  const hours = Number($("newsHours").value), only = $("emergencyOnly").checked;
+  return D.news.filter((n) => generated - new Date(n.time) <= hours * 3600e3 && (!only || n.alert));
+}
+function drawNews() {
+  G.news.clearLayers();
+  const places = new Map();
+  for (const n of newsInWindow()) {
+    const k = `${n.lat.toFixed(3)},${n.lon.toFixed(3)}`;
+    if (!places.has(k)) places.set(k, { lat: n.lat, lon: n.lon, place: n.place, items: [] });
+    places.get(k).items.push(n);
+  }
+  for (const p of places.values()) {
+    const s = Math.min(14 + Math.sqrt(p.items.length) * 4, 34);
+    const m = L.marker([p.lat, p.lon], { icon: L.divIcon({ className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2], html: `<span class="newsdot" style="width:${s}px;height:${s}px">${p.items.length > 1 ? p.items.length : ""}</span>` }) })
+      .bindPopup(`<div class="pop"><h3>${esc(p.place)}</h3><div class="m">${p.items.length} ${p.items.length === 1 ? "story" : "stories"}; GDELT's place for each is approximate</div><ul>${p.items.slice(0, 15).map((n) => `<li><a href="${safeUrl(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a> <span class="m">${esc(n.outlets > 1 ? `${n.outlets} outlets` : n.domain)} · ${fmt(n.time, false)}</span></li>`).join("")}</ul></div>`, { maxWidth: 360 })
+      .addTo(G.news);
+    for (const n of p.items) markers[n.id] = m;
+  }
+}
+
+// ---- CHP and weather ----
+for (const i of D.incidents) {
+  markers[i.id] = L.circleMarker([i.lat, i.lon], { radius: 4.5, color: tok("--panel"), weight: 1, fillColor: tok("--chp"), fillOpacity: 0.9 })
+    .bindPopup(`<div class="pop"><h3>${esc(i.description)}</h3><div class="m">${fmt(i.time)} · CHP incident ${esc(i.incident)}${i.duration_minutes ? ` · ${esc(i.duration_minutes)} min` : ""}</div></div>`).addTo(G.chp);
+}
+for (const w of D.weather) {
+  const wind = w.wind_direction_degrees != null ? `<i style="transform:rotate(${(w.wind_direction_degrees + 180) % 360}deg)">↑</i>${w.wind_speed_mps.toFixed(1)} m/s` : "";
+  L.marker([w.lat, w.lon], { icon: L.divIcon({ className: "", iconAnchor: [30, 10], html: `<span class="wxl">${Math.round(w.temperature_f)}°F ${wind}</span>` }) })
+    .bindPopup(`<div class="pop"><h3>${esc(w.station)}</h3><div class="m">${fmt(w.time)}</div>${esc(w.description)} · ${Math.round(w.temperature_f)}°F · humidity ${w.humidity}%<br>wind ${w.wind_speed_mps} m/s${w.wind_direction_degrees != null ? ` from ${w.wind_direction_degrees}°` : ""}</div>`)
+    .addTo(G.wx);
+}
+
+// ---- fire strip and lists ----
+const active = major.filter((f) => !(f.contained >= 100));
+$("firestrip").innerHTML = active.slice(0, 5).map((f) => `<button type="button" class="firechip" data-id="fire:${esc(f.key)}"><b>▲</b>${esc(f.name.replace(/ Fire$/, ""))} <span class="n">${f.acres != null ? Math.round(f.acres).toLocaleString("en-US") + " ac" : ""}${f.contained != null ? ` · ${f.contained}%` : ""}</span></button>`).join("");
+
+let tab = "fires";
+function drawList() {
+  $("newsControls").hidden = tab !== "news";
+  let rows = [];
+  if (tab === "fires") {
+    rows = major.map((f) => ({ id: `fire:${f.key}`, t: `${f.contained >= 100 ? "" : '<span class="tag hot">Active</span>'}${esc(f.name)}`,
+      m: `${acres(f.acres)}${f.contained != null ? ` · ${f.contained}% contained` : ""} · ${f.news.length} articles · ${camerasOn(f).length} cameras facing${f.county ? ` · ${esc(f.county)}` : ""}` }));
+  } else if (tab === "news") {
+    rows = newsInWindow().map((n) => ({ id: n.id, t: esc(n.title), m: `${fmt(n.time, false)} · ${esc(n.place)} · ${esc(n.outlets > 1 ? `${n.outlets} outlets` : n.domain)}${n.categories.length ? " · " + n.categories.map((c) => `<span class="tag">${esc(c)}</span>`).join("") : ""}` }));
+  } else if (tab === "chp") {
+    rows = D.incidents.map((i) => ({ id: i.id, t: esc(i.description), m: `${fmt(i.time)} · incident ${esc(i.incident)}` }));
+  } else {
+    rows = ACS.filter((c) => c.reaimed || (c.bearings || []).length > 1).map((c) => ({ id: `cam:${c.name}`, t: esc(c.name), m: `now facing ${Math.round(c.bearing)}° · pointed ${(c.bearings || []).map((b) => b + "°").join(", ")} in the last day` }));
+  }
+  $("list").innerHTML = rows.length ? rows.slice(0, 300).map((r) => `<li tabindex="0" data-id="${esc(r.id)}"><div class="t">${r.t}</div><div class="m">${r.m}</div></li>`).join("") : `<li class="empty">Nothing here in this snapshot.</li>`;
+}
+function focusItem(id) {
+  const m = markers[id];
+  if (!m) return;
+  const group = id.startsWith("fire:") ? "fires" : id.startsWith("cam:") ? "ac" : id.startsWith("gdelt") ? "news" : "chp";
+  if (!map.hasLayer(G[group])) { G[group].addTo(map); $(`layer-${group}`).checked = true; }
+  map.setView(m.getLatLng(), Math.max(map.getZoom(), id.startsWith("fire:") ? 12 : 11));
+  m.openPopup();
+}
+$("list").addEventListener("click", (e) => { const li = e.target.closest("li[data-id]"); if (li) focusItem(li.dataset.id); });
+$("list").addEventListener("keydown", (e) => { const li = e.target.closest("li[data-id]"); if (li && e.key === "Enter") focusItem(li.dataset.id); });
+$("firestrip").addEventListener("click", (e) => { const b = e.target.closest("button[data-id]"); if (b) focusItem(b.dataset.id); });
+document.querySelector(".tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  tab = b.dataset.tab;
+  for (const x of document.querySelectorAll(".tabs button")) x.setAttribute("aria-selected", String(x === b));
+  drawList();
+});
+for (const id of ["emergencyOnly", "newsHours"]) $(id).addEventListener("change", () => { drawNews(); drawList(); });
+
+drawNews();
+drawList();
+const wanted = /^#fire-([a-z0-9-]+)$/.exec(location.hash);
+if (wanted && markers[`fire:${wanted[1].replace(/-/g, " ")}`]) focusItem(`fire:${wanted[1].replace(/-/g, " ")}`);
+</script>

@@ -6,8 +6,9 @@ Writes index.html (the page, with its styles and script inlined), data.json
 (everything the page asks the server for, as of now, with camera thumbnails
 embedded) and two basemap images stitched from OpenStreetMap tiles, since a
 hosted page such as a claude.ai artifact cannot load tiles or reach this
-machine. Rebuild and republish data.json to update it; the page checks for a
-new one every 5 minutes. Needs the explorer running and Pillow (the system
+machine. Rebuild and republish data.json and version.json to update it; the page
+checks version.json every 5 minutes and fetches data.json only when it
+changed. Needs the explorer running and Pillow (the system
 Python has it; the processing venv does not).
 """
 
@@ -39,6 +40,7 @@ WINDOW_HOURS = 3
 SEQUENCE_STEP = timedelta(minutes=30)
 SEQUENCE_HOURS = 24
 SEQUENCE_CAMERAS = 3  # nearest cameras facing each active fire get a frame sequence
+HISTORY_WIDTH = 240
 
 
 def iso(value: datetime) -> str:
@@ -116,8 +118,35 @@ class Builder:
                         last = t
                 if picked:
                     data["sequences"][key] = picked
+
+        # Every camera's last 3 hours: a frame every 30 minutes, and both sides
+        # of each re-aim, so each direction it pointed has a view.
+        for camera in snapshot["alertcalifornia"]:
+            frames = self.get("/api/frames", source="alertcalifornia", name=camera["name"], start=snapshot["start"], end=at)
+            keep = set()
+            last = None
+            for i, frame in enumerate(frames):
+                t = parse(frame["time"])
+                turned = i and not same_bearing(frames[i - 1].get("bearing"), frame.get("bearing"))
+                if turned:
+                    keep.update((i - 1, i))
+                if last is None or t - last >= SEQUENCE_STEP or turned:
+                    keep.add(i)
+                    last = t
+            if frames:
+                keep.add(len(frames) - 1)
+            picked = [frames[i] for i in sorted(keep) if self.thumbnail(frames[i]["frame"], HISTORY_WIDTH)]
+            key = f"alertcalifornia:{camera['name']}"
+            merged = {f["frame"]: f for f in data["sequences"].get(key, []) + picked}
+            data["sequences"][key] = sorted(merged.values(), key=lambda f: f["time"])
         data["frames"] = self.frames
         return data
+
+
+def same_bearing(a, b) -> bool:
+    if a is None or b is None:
+        return True
+    return abs(((b - a) + 540) % 360 - 180) <= 2
 
 
 def tile_xy(lat: float, lon: float, zoom: int) -> tuple[float, float]:
@@ -159,7 +188,7 @@ def page(basemaps: list[dict]) -> str:
     styles = "\n".join((static / name).read_text() for name in (
         "vendor/leaflet.css", "vendor/MarkerCluster.min.css", "vendor/MarkerCluster.Default.min.css", "style.css"))
     scripts = "\n".join(re.findall(r'<script src="https://cdnjs[^"]+"></script>', html))
-    settings = json.dumps({"data": "data.json", "basemaps": basemaps})
+    settings = json.dumps({"data": "data.json", "version": "version.json", "basemaps": basemaps})
     app = (static / "app.js").read_text()
     assert "</script" not in app
     return (f"{title}\n<style>\n{styles}\n</style>\n{body}{scripts}\n"
@@ -185,6 +214,7 @@ def main() -> None:
     temporary = out / "data.json.part"
     temporary.write_text(text)
     temporary.replace(out / "data.json")
+    (out / "version.json").write_text(json.dumps({"generated": data["generated"]}))
     print(f"{out}: data.json {len(text) / 1e6:.1f} MB, {len(data['frames'])} frames, "
           f"{sum(len(v) for v in data['sequences'].values())} sequence frames, {len(data['fires']['fires'])} fires, "
           f"{len(data['live']['chp'] or [])} CHP calls, {len(data['live']['alerts'])} alerts, "

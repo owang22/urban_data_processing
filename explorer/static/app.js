@@ -115,6 +115,13 @@ function selectedTime() {
 const frameSrc = (path) => (STATIC ? staticData.frames[path] || "" : `/frame?p=${encodeURIComponent(path)}`);
 
 async function loadStatic() {
+  if (staticData && STATIC.version) {
+    // A few bytes tell whether a new data file was published.
+    try {
+      const v = await (await fetch(STATIC.version, { cache: "no-store" })).json();
+      if (v.generated === staticData.generated) return false;
+    } catch { /* fall through to the data file */ }
+  }
   const r = await fetch(STATIC.data, { cache: "no-store" });
   if (!r.ok) throw new Error(`${STATIC.data}: ${r.status}`);
   const fresh = await r.json();
@@ -627,7 +634,8 @@ function cameraPopup(source, c, at) {
   el.innerHTML = `<h3>${esc(c.name)}</h3>
     <div class="m info">${fmtTime(c.time)} (${ago(c.time, at)}) ${pointing ? "· " + esc(pointing) : ""}</div>
     <img alt="Latest frame from ${esc(c.name)}" src="${esc(frameSrc(c.frame))}">
-    <div class="scrub"><button type="button" aria-label="Play">▶</button><input type="range" min="0" max="0" value="0" aria-label="Frame"><span class="m n">${c.frames} frames</span></div>`;
+    <div class="scrub"><button type="button" aria-label="Play">▶</button><input type="range" min="0" max="0" value="0" aria-label="Frame"><span class="m n">${c.frames} frames</span></div>
+    <div class="views" hidden></div>`;
   const img = el.querySelector("img"), slider = el.querySelector("input"), info = el.querySelector(".info"),
     play = el.querySelector("button"), n = el.querySelector(".n");
   let frames = [], timer = null;
@@ -637,6 +645,7 @@ function cameraPopup(source, c, at) {
     img.src = frameSrc(f.frame);
     info.textContent = `${fmtTime(f.time)}${f.bearing != null ? ` · bearing ${Math.round(f.bearing)}°` : ""}${f.source === "1min-history" ? " · 1-min history" : ""}`;
     n.textContent = `${i + 1}/${frames.length}`;
+    for (const b of el.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(i >= Number(b.dataset.first) && i <= Number(b.dataset.last)));
   };
   const params = new URLSearchParams({ source, name: c.name, start: snapshot.start, end: snapshot.at });
   getJSON(`/api/frames?${params}`).then((list) => {
@@ -645,6 +654,23 @@ function cameraPopup(source, c, at) {
     slider.max = Math.max(frames.length - 1, 0);
     slider.value = slider.max;
     n.textContent = `${frames.length}/${frames.length}`;
+    // One button per direction the camera pointed, jumping to its last frame that way.
+    const runs = [];
+    frames.forEach((f, i) => {
+      const run = runs[runs.length - 1];
+      if (run && f.bearing != null && Math.abs(((f.bearing - run.bearing) + 540) % 360 - 180) <= 2) run.last = i;
+      else if (f.bearing != null) runs.push({ bearing: f.bearing, first: i, last: i });
+    });
+    const views = el.querySelector(".views");
+    if (runs.length > 1) {
+      views.hidden = false;
+      views.innerHTML = `<span class="m">Views:</span>` + runs.map((r) => `<button type="button" data-first="${r.first}" data-last="${r.last}"
+        aria-pressed="${r.last === frames.length - 1}">${Math.round(r.bearing)}° <span class="m">${fmtTime(frames[r.first].time, false)}${r.last > r.first ? `–${fmtTime(frames[r.last].time, false)}` : ""}</span></button>`).join("");
+      views.addEventListener("click", (e) => {
+        const b = e.target.closest("button");
+        if (b) { slider.value = b.dataset.last; show(Number(b.dataset.last)); }
+      });
+    }
   });
   slider.addEventListener("input", () => show(Number(slider.value)));
   play.addEventListener("click", () => {

@@ -102,6 +102,9 @@ select { font: inherit; padding: 2px 4px; background: var(--panel); color: var(-
 .pop .scrub { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .pop .scrub input { flex: 1; }
 .pop .scrub button { font: inherit; padding: 1px 8px; cursor: pointer; }
+.pop .views { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; }
+.pop .views button { font: inherit; font-size: 12px; padding: 1px 6px; border: 1px solid #ccc; border-radius: 3px; background: #f7f5f0; cursor: pointer; }
+.pop .views button[aria-pressed="true"] { border-color: #d6203a; background: #fde8eb; }
 .pop a { overflow-wrap: anywhere; }
 .dot { display: block; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
 .flame { display: block; background: var(--fire); border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4);

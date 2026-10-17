@@ -16,31 +16,43 @@ const ago = (iso, at) => {
 
 // ---- map ------------------------------------------------------------------
 
-const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([34.06, -118.45], 10);
-const base = {
-  "Streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19, attribution: "© OpenStreetMap contributors" }),
-  "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }),
-};
-base["Streets"].addTo(map);
-L.control.layers(base, null, { position: "topleft" }).addTo(map);
+// A published copy (publish.py) has no server: it reads one data file that is
+// regenerated every 30 minutes, and its basemap is stitched images, since it
+// cannot load map tiles.
+const STATIC = window.SITUATION_STATIC || null;
+let staticData = null;
+
+const map = L.map("map", { zoomControl: true, preferCanvas: true, ...(STATIC ? { minZoom: 9, maxZoom: 14 } : {}) })
+  .setView([34.06, -118.45], 10);
+if (STATIC) {
+  for (const b of STATIC.basemaps) L.imageOverlay(b.src, b.bounds, { pane: "tilePane", attribution: "© OpenStreetMap contributors" }).addTo(map);
+  map.setMaxBounds(L.latLngBounds(STATIC.basemaps[0].bounds).pad(0.05));
+} else {
+  const base = {
+    "Streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "© OpenStreetMap contributors" }),
+    "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }),
+  };
+  base["Streets"].addTo(map);
+  L.control.layers(base, null, { position: "topleft" }).addTo(map);
+}
 L.control.scale({ imperial: true, metric: true }).addTo(map);
 
 // Weather alerts sit under everything else.
 map.createPane("alerts").style.zIndex = 350;
 
 const LAYERS = [
-  { key: "alerts", label: "Weather alerts (NWS)", color: "--alert-fire",
+  { key: "alerts", label: "Weather alerts", color: "--alert-fire",
     note: "Warnings and advisories in effect, drawn over their forecast zones in the National Weather Service colours." },
   { key: "fires", label: "Wildfires", color: "--fire",
     note: "CAL FIRE and NIFC incidents, mapped perimeters, and NASA satellite heat detections (last 24 h; some are industrial sites)." },
-  { key: "quakes", label: "Earthquakes (USGS)", color: "--quake" },
-  { key: "alertcalifornia", label: "AlertCalifornia cameras", color: "--ac",
+  { key: "quakes", label: "Earthquakes", color: "--quake" },
+  { key: "alertcalifornia", label: "AlertCalifornia", color: "--ac",
     note: "Wedge = view direction and field of view. Red = re-aimed in this window." },
   { key: "cctv", label: "Caltrans CCTV", color: "--cctv" },
   { key: "incidents", label: "CHP calls", color: "--chp" },
-  { key: "news", label: "News (GDELT)", color: "--news" },
+  { key: "news", label: "News", color: "--news" },
   { key: "weather", label: "Weather", color: "--weather" },
   { key: "beliefs", label: "Agent beliefs", color: "--belief",
     note: "Circles are where a belief applies, shaded by the agent's confidence. Pick one in the Beliefs tab to see lines to its evidence." },
@@ -96,10 +108,36 @@ let tab = "incidents";
 const markers = {};     // id -> marker, for the list
 
 function selectedTime() {
+  if (STATIC) return new Date(staticData.generated);
   return $("live").checked ? new Date() : new Date(Number($("slider").value) * 1000);
 }
 
+const frameSrc = (path) => (STATIC ? staticData.frames[path] || "" : `/frame?p=${encodeURIComponent(path)}`);
+
+async function loadStatic() {
+  const r = await fetch(STATIC.data, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${STATIC.data}: ${r.status}`);
+  const fresh = await r.json();
+  const changed = !staticData || fresh.generated !== staticData.generated;
+  staticData = fresh;
+  return changed;
+}
+
+// The published copy answers the same questions from its data file.
+function staticAnswer(url) {
+  const [path, query] = url.split("?");
+  const q = new URLSearchParams(query || ""), d = staticData;
+  if (path === "/api/range") return d.range;
+  if (path === "/api/snapshot") return d.snapshot;
+  if (path === "/api/fires") return d.fires;
+  if (path === "/api/live") return d.live;
+  if (path === "/api/beliefs") return q.get("run") ? d.beliefs.states[q.get("run")] || { beliefs: [] } : { runs: d.beliefs.runs };
+  if (path === "/api/frames") return d.sequences[`${q.get("source")}:${q.get("name")}`] || [];
+  throw new Error(`${path} is not in the published copy`);
+}
+
 async function getJSON(url) {
+  if (STATIC) return staticAnswer(url);
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
@@ -121,7 +159,9 @@ async function loadRange() {
     ? runs.map((r) => `<option value="${esc(r.run)}">${esc(r.run)}${r.agents.join(", ") !== r.run ? ` · ${esc(r.agents.join(", "))}` : ""} · ${r.beliefs} beliefs</option>`).join("")
     : `<option value="">No belief runs yet</option>`;
   if (runs.some((r) => r.run === current)) runSelect.value = current;
-  $("status").textContent = `Data refreshed ${fmtTime(info.refreshed)} · times are Los Angeles`;
+  $("status").textContent = STATIC
+    ? `Snapshot of ${fmtTime(staticData.generated)}, republished every 30 minutes · times are Los Angeles`
+    : `Data refreshed ${fmtTime(info.refreshed)} · times are Los Angeles`;
 }
 
 async function loadSnapshot() {
@@ -551,7 +591,7 @@ function drawBeliefDetail() {
         <div><span class="tag src">${esc(e.source)}</span> ${e.url ? `<a href="${safeUrl(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a>` : esc(e.title || "")}</div>
         ${e.note ? `<div class="m">${esc(e.note)}</div>` : ""}
         <div class="m">${e.time ? fmtTime(e.time) : ""} · weight <span class="w"><i style="width:${pct(e.weight)}"></i></span>${e.lat != null ? ` · <button type="button" class="show">show on map</button>` : ""}</div>
-        ${e.frame ? `<img loading="lazy" alt="${esc(e.title || "camera frame")}" src="/frame?p=${encodeURIComponent(e.frame)}">` : ""}
+        ${e.frame ? `<img loading="lazy" alt="${esc(e.title || "camera frame")}" src="${esc(frameSrc(e.frame))}">` : ""}
       </li>`).join("")}</ul>`;
   };
   el.innerHTML = `<button type="button" class="back">← All beliefs</button>
@@ -586,7 +626,7 @@ function cameraPopup(source, c, at) {
     ? `bearing ${Math.round(c.bearing)}°${c.tilt != null ? ` · tilt ${c.tilt.toFixed(1)}°` : ""}${c.zoom != null ? ` · zoom ${c.zoom}` : ""}` : "";
   el.innerHTML = `<h3>${esc(c.name)}</h3>
     <div class="m info">${fmtTime(c.time)} (${ago(c.time, at)}) ${pointing ? "· " + esc(pointing) : ""}</div>
-    <img alt="Latest frame from ${esc(c.name)}" src="/frame?p=${encodeURIComponent(c.frame)}">
+    <img alt="Latest frame from ${esc(c.name)}" src="${esc(frameSrc(c.frame))}">
     <div class="scrub"><button type="button" aria-label="Play">▶</button><input type="range" min="0" max="0" value="0" aria-label="Frame"><span class="m n">${c.frames} frames</span></div>`;
   const img = el.querySelector("img"), slider = el.querySelector("input"), info = el.querySelector(".info"),
     play = el.querySelector("button"), n = el.querySelector(".n");
@@ -594,13 +634,14 @@ function cameraPopup(source, c, at) {
   const show = (i) => {
     const f = frames[i];
     if (!f) return;
-    img.src = `/frame?p=${encodeURIComponent(f.frame)}`;
+    img.src = frameSrc(f.frame);
     info.textContent = `${fmtTime(f.time)}${f.bearing != null ? ` · bearing ${Math.round(f.bearing)}°` : ""}${f.source === "1min-history" ? " · 1-min history" : ""}`;
     n.textContent = `${i + 1}/${frames.length}`;
   };
   const params = new URLSearchParams({ source, name: c.name, start: snapshot.start, end: snapshot.at });
   getJSON(`/api/frames?${params}`).then((list) => {
     frames = list;
+    el.querySelector(".scrub").hidden = !frames.length;  // the published copy has sequences for some cameras only
     slider.max = Math.max(frames.length - 1, 0);
     slider.value = slider.max;
     n.textContent = `${frames.length}/${frames.length}`;
@@ -647,6 +688,10 @@ document.querySelector(".tabs").addEventListener("click", (e) => {
 });
 
 (async function start() {
+  if (STATIC) {
+    document.querySelector(".time").hidden = true;
+    try { await loadStatic(); } catch (err) { $("status").textContent = `Could not load the data: ${err.message}`; return; }
+  }
   try { await loadRange(); } catch (err) { $("status").textContent = `Could not reach the server: ${err.message}`; }
   await loadSnapshot();
   const wanted = /^#fire-([a-z0-9-]+)$/.exec(location.hash);
@@ -655,6 +700,13 @@ document.querySelector(".tabs").addEventListener("click", (e) => {
   const belief = /^#belief-(.+)$/.exec(location.hash);
   if (belief) { selectedBelief = decodeURIComponent(belief[1]); drawBeliefs(); }
   if (location.hash === "#beliefs" || belief) setTab("beliefs");
+  if (STATIC) {
+    // Pick up a republished data file without a reload.
+    setInterval(async () => {
+      try { if (await loadStatic() && !popupOpen) { await loadRange(); await loadSnapshot(); } } catch { /* keep the last view */ }
+    }, 5 * 60000);
+    return;
+  }
   setInterval(async () => {
     if (!$("live").checked) return;
     try { await loadRange(); } catch { /* keep the last view */ }

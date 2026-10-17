@@ -214,6 +214,14 @@ containment the newest article reports, and the AlertCalifornia cameras whose
 view covers it. Link to a fire with `#fire-<name>`, e.g.
 `http://127.0.0.1:8095/#fire-bryson`.
 
+To publish a copy somewhere that cannot reach this machine (such as a
+claude.ai artifact), `/usr/bin/python3 -m explorer.publish` writes the same
+page to `processing-output/published/site` with a `data.json` of everything
+it shows as of now (camera thumbnails, fire time-lapses and beliefs
+embedded) and stitched basemap images. Republish `data.json` to update it;
+an open page picks up a new one within 5 minutes. It needs Pillow, which the
+system Python has.
+
 ### Agent beliefs
 
 The Beliefs tab shows what an agent believes about the world, how sure it

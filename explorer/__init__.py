@@ -1,1 +1,1 @@
-"""Read-only map explorer over the collected raw data."""
+"""LA situation map: the collected data, live public feeds and agent beliefs on one map."""

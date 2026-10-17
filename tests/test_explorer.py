@@ -83,8 +83,9 @@ def test_news_fires_reads_largest_acreage_and_skips_comparisons():
 
 
 def test_fire_snapshot_merges_feeds_as_of_time(tmp_path):
-    from explorer.fires import FireFeeds
-    feeds = FireFeeds(tmp_path)
+    from explorer.feeds import FeedStore
+    from explorer.fires import fire_snapshot
+    feeds = FeedStore(tmp_path)
     (tmp_path / "calfire").mkdir()
     (tmp_path / "calfire" / "20261016T120000Z.json").write_text(json.dumps([
         {"Name": "Bryson Fire ", "Latitude": 34.09, "Longitude": -118.84, "AcresBurned": 147, "PercentContained": 17,
@@ -97,7 +98,71 @@ def test_fire_snapshot_merges_feeds_as_of_time(tmp_path):
         {"properties": {"IncidentName": "AVA", "IncidentSize": None, "FireDiscoveryDateTime": 1792107679000},
          "geometry": {"coordinates": [-118.76, 34.14]}}]}))
     at = datetime(2026, 10, 16, 13, tzinfo=timezone.utc)
-    fires = {f["key"]: f for f in feeds.snapshot(at)["fires"]}
+    fires = {f["key"]: f for f in fire_snapshot(feeds, at)["fires"]}
     assert set(fires) == {"bryson", "ava"}
     assert fires["bryson"]["acres"] == 147 and fires["bryson"]["source"] == "CAL FIRE"
-    assert feeds.snapshot(datetime(2026, 10, 16, 11, tzinfo=timezone.utc))["fires"] == []
+    assert fire_snapshot(feeds, datetime(2026, 10, 16, 11, tzinfo=timezone.utc))["fires"] == []
+
+
+CHP_XML = b"""<?xml version="1.0" ?><State><Center ID = "LAHB"><Dispatch ID = "LACC">
+<Log ID = "261017LA0005"><LogTime>"Oct 17 2026 12:00AM"</LogTime><LogType>"1179-Trfc Collision-1141 Enrt"</LogType>
+<Location>"I10 W / N Azusa Ave"</Location><LocationDesc>"WB JEO"</LocationDesc><Area>"Baldwin Park"</Area>
+<LATLON>"34072223:117907517"</LATLON><LogDetails><details><DetailTime>"Oct 17 2026 12:00AM"</DetailTime>
+<IncidentDetail>"[1] 2 VEHS"</IncidentDetail></details><units><UnitTime>"x"</UnitTime></units></LogDetails></Log>
+<Log ID = "261017LA0006"><LogTime>"Oct 17 2026 12:01AM"</LogTime><LogType>"1125-Traffic Hazard"</LogType>
+<LATLON>"38683821:121456859"</LATLON></Log></Dispatch></Center></State>"""
+
+
+def test_chp_calls_are_clipped_and_read_as_of_time(tmp_path):
+    from explorer.feeds import FeedStore, _chp
+    calls = json.loads(_chp(CHP_XML, None))
+    assert len(calls) == 1  # the Sacramento call is outside the region
+    call = calls[0]
+    assert (call["lat"], call["lon"]) == (34.072223, -117.907517)
+    assert call["time"] == "2026-10-17T07:00:00Z" and call["location"] == "I10 W / N Azusa Ave"
+    assert call["details"] == [{"time": "2026-10-17T07:00:00Z", "text": "[1] 2 VEHS"}] and call["units"] == 1
+
+    store = FeedStore(tmp_path)
+    store._save("chp-live", "json", json.dumps(calls).encode(), datetime(2026, 10, 17, 7, 2, tzinfo=timezone.utc))
+    live = store.live(datetime(2026, 10, 17, 7, 10, tzinfo=timezone.utc), 3)
+    assert [c["kind"] for c in live["chp"]] == ["injury"]
+    # An hour later with no newer snapshot, collection was down: no live calls.
+    assert store.live(datetime(2026, 10, 17, 8, 10, tzinfo=timezone.utc), 3)["chp"] is None
+
+
+def test_zone_outlines_keep_their_shape():
+    from explorer.feeds import _simplify
+    ring = [[0, 0], [1, 0.0001], [2, 0], [2, 2], [1, 2.0001], [0, 2], [0, 0]]
+    assert _simplify([ring]) == [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]]
+
+
+def test_belief_history_replays_as_of_time(tmp_path):
+    from explorer.beliefs import BeliefLog, BeliefRuns, evidence
+    log = BeliefLog(tmp_path / "run-1.jsonl", agent="test")
+    t = datetime(2026, 10, 16, 20, tzinfo=timezone.utc)
+    log.record("burning", "The fire is burning", 0.6, time=t)
+    log.record("growing", "The fire is growing", 0.7, time=t + timedelta(hours=1), parents=["burning"],
+               evidence=[evidence("supports", "calfire", title="147 acres", weight=0.6)])
+    log.record("burning", "The fire is burning", 0.9, time=t + timedelta(hours=2))
+    runs = BeliefRuns(tmp_path)
+    assert runs.runs()[0]["beliefs"] == 2
+    now = {b["id"]: b for b in runs.state("run-1")["beliefs"]}
+    assert [h["confidence"] for h in now["burning"]["history"]] == [0.6, 0.9]
+    assert now["burning"]["children"] == ["growing"]
+    earlier = {b["id"]: b for b in runs.state("run-1", t + timedelta(minutes=30))["beliefs"]}
+    assert set(earlier) == {"burning"} and earlier["burning"]["confidence"] == 0.6
+
+
+def test_belief_validation_and_run_names(tmp_path):
+    import pytest
+    from explorer.beliefs import BeliefLog, BeliefRuns
+    log = BeliefLog(tmp_path / "r.jsonl", agent="test")
+    with pytest.raises(ValueError):
+        log.record("x", "Too sure", 1.5)
+    with pytest.raises(ValueError):
+        log.record("x", "Odd stance", 0.5, evidence=[{"stance": "maybe", "source": "a"}])
+    (tmp_path / "r.jsonl").write_text('{"id": "x"}\n' + json.dumps(
+        {"id": "y", "statement": "ok", "time": "2026-10-16T20:00:00Z"}) + "\n")
+    assert [b["id"] for b in BeliefRuns(tmp_path).state("r")["beliefs"]] == ["y"]  # bad line skipped
+    with pytest.raises(ValueError):
+        BeliefRuns(tmp_path).state("../r")

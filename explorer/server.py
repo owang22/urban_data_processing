@@ -2,9 +2,11 @@
 
     python -m explorer.server [--port 8095] [--host 127.0.0.1] [--days 3]
 
-Read-only toward the collectors' raw data folder. It fetches public wildfire
-feeds (CAL FIRE, NIFC, NASA FIRMS) every 10 minutes and keeps snapshots in
-processing-output/fire-feeds.
+Read-only toward the collectors' raw data folder. It also collects public
+live feeds (CHP dispatch calls, National Weather Service alerts, USGS
+earthquakes, CAL FIRE, NIFC and NASA FIRMS; see feeds.py) into
+processing-output/live-feeds, and shows agent belief logs from
+processing-output/beliefs (see beliefs.py).
 Binds to localhost by default; reach it from another machine with
     ssh -L 8095:localhost:8095 <user>@<this machine>
 """
@@ -20,14 +22,16 @@ import threading
 import time
 from urllib.parse import parse_qs, urlparse
 
-from .fires import FireFeeds
+from .beliefs import BeliefRuns
+from .feeds import FeedStore
+from .fires import fire_snapshot
 from .index import ExplorerIndex, SOURCES, parse_time
 
 STATIC = Path(__file__).with_name("static")
 REPOSITORY = Path(__file__).parents[1]
 
 
-def make_handler(index: ExplorerIndex, fires: FireFeeds):
+def make_handler(index: ExplorerIndex, feeds: FeedStore, beliefs: BeliefRuns):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(STATIC), **kwargs)
@@ -57,11 +61,23 @@ def make_handler(index: ExplorerIndex, fires: FireFeeds):
                 if url.path == "/api/fires":
                     at = parse_time(query["at"]) if query.get("at") else datetime.now(timezone.utc)
                     hours = min(max(float(query.get("hours", 24)), 1), 72)
-                    result = fires.snapshot(at)
+                    result = fire_snapshot(feeds, at)
                     news = index.fire_news({f["key"] for f in result["fires"]}, at - timedelta(hours=hours), at)
                     for fire in result["fires"]:
                         fire["news"] = news.get(fire["key"], [])[:25]
                     return self.send_json(result)
+                if url.path == "/api/live":
+                    at = parse_time(query["at"]) if query.get("at") else datetime.now(timezone.utc)
+                    hours = min(max(float(query.get("hours", 3)), 0.25), 72)
+                    return self.send_json(feeds.live(at, hours))
+                if url.path == "/api/beliefs":
+                    if not query.get("run"):
+                        return self.send_json({"runs": beliefs.runs()})
+                    at = parse_time(query["at"]) if query.get("at") else None
+                    try:
+                        return self.send_json(beliefs.state(query["run"], at))
+                    except KeyError:
+                        return self.send_json({"error": "no such run"}, 404)
                 if url.path == "/api/frames":
                     if query.get("source") not in ("alertcalifornia", "cctv"):
                         return self.send_json({"error": "unknown source"}, 400)
@@ -100,16 +116,17 @@ def refresh_forever(index: ExplorerIndex, interval: float) -> None:
             print(f"index refresh failed: {exc!r}", flush=True)
 
 
-def fetch_fires_forever(fires: FireFeeds, interval: float) -> None:
+def fetch_feeds_forever(feeds: FeedStore) -> None:
+    """Each feed is fetched on its own schedule (feeds.FEEDS); check every 30 s."""
     while True:
         try:
-            statuses = fires.fetch()
+            statuses = feeds.fetch(only_due=True)
             errors = {k: v for k, v in statuses.items() if v.startswith("error")}
-            print(f"fire feeds: {sum(v == 'saved' for v in statuses.values())} updated"
-                  + (f", errors: {errors}" if errors else ""), flush=True)
+            if errors:
+                print(f"live feed errors: {errors}", flush=True)
         except Exception as exc:
-            print(f"fire feed fetch failed: {exc!r}", flush=True)
-        time.sleep(interval)
+            print(f"live feed fetch failed: {exc!r}", flush=True)
+        time.sleep(30)
 
 
 def main() -> None:
@@ -119,9 +136,11 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=3, help="most recent days of each source to load")
     parser.add_argument("--refresh-seconds", type=float, default=60)
     parser.add_argument("--data-root", help="defaults to paths.data_root in config.json")
-    parser.add_argument("--fire-cache", default=str(REPOSITORY / "processing-output" / "fire-feeds"),
-                        help="where fetched fire feed snapshots are kept (14 days)")
-    parser.add_argument("--fire-seconds", type=float, default=600, help="how often to fetch the fire feeds")
+    parser.add_argument("--feed-cache", default=str(REPOSITORY / "processing-output" / "live-feeds"),
+                        help="where live feed snapshots are kept (14 days)")
+    parser.add_argument("--no-feeds", action="store_true", help="show saved feeds but do not fetch new ones")
+    parser.add_argument("--beliefs", default=str(REPOSITORY / "processing-output" / "beliefs"),
+                        help="folder of belief logs (*.jsonl)")
     args = parser.parse_args()
 
     data_root = args.data_root
@@ -136,9 +155,10 @@ def main() -> None:
     print(f"loading {', '.join(SOURCES)} from {data_root} ...", flush=True)
     index.refresh()
     threading.Thread(target=refresh_forever, args=(index, args.refresh_seconds), daemon=True).start()
-    fires = FireFeeds(args.fire_cache)
-    threading.Thread(target=fetch_fires_forever, args=(fires, args.fire_seconds), daemon=True).start()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(index, fires))
+    feeds = FeedStore(args.feed_cache)
+    if not args.no_feeds:
+        threading.Thread(target=fetch_feeds_forever, args=(feeds,), daemon=True).start()
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(index, feeds, BeliefRuns(args.beliefs)))
     print(f"explorer on http://{args.host}:{args.port}", flush=True)
     server.serve_forever()
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>LA Observation Map</title>
+<title>LA Situation Map</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css">
@@ -13,7 +13,7 @@
 <div id="map"></div>
 <aside id="panel">
   <header>
-    <h1>LA Observation Map</h1>
+    <h1>LA Situation Map</h1>
     <p id="status">Loading…</p>
   </header>
 
@@ -40,13 +40,17 @@
 
   <section class="feed">
     <div class="tabs" role="tablist">
-      <button role="tab" data-tab="fires" aria-selected="true">Fires</button>
+      <button role="tab" data-tab="incidents" aria-selected="true">Incidents</button>
+      <button role="tab" data-tab="chp" aria-selected="false">CHP</button>
       <button role="tab" data-tab="news" aria-selected="false">News</button>
-      <button role="tab" data-tab="incidents">CHP</button>
-      <button role="tab" data-tab="reaimed">Re-aimed</button>
+      <button role="tab" data-tab="reaimed" aria-selected="false">Cameras</button>
+      <button role="tab" data-tab="beliefs" aria-selected="false">Beliefs</button>
     </div>
     <label class="filter" id="alertFilter"><input type="checkbox" id="alertsOnly" checked> Emergency-related only</label>
+    <label class="filter" id="roadworkFilter"><input type="checkbox" id="hideRoadwork" checked> Hide roadwork and assists</label>
+    <div class="filter" id="runPicker" hidden><label for="run">Run</label> <select id="run"></select></div>
     <ol id="list"></ol>
+    <div id="detail" hidden></div>
   </section>
 </aside>
 

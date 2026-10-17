@@ -183,13 +183,14 @@ aliases.
 The simulator already chose the incident types, run counts, and number of
 steps. Replay only reads the resulting files.
 
-## Map explorer
+## Situation map
 
-A read-only web map of the raw data: AlertCalifornia cameras with their view
-direction (re-aimed cameras in red, with a frame-by-frame player), Caltrans
-CCTV, CHP incidents, geolocated GDELT news and weather, with a time slider.
-It uses the replay readers, so it shows what replay would send. It needs no
-API keys and no extra packages.
+A web map of what is happening in Los Angeles: AlertCalifornia cameras with
+their view direction (re-aimed cameras in red, with a frame-by-frame
+player), Caltrans CCTV, live CHP dispatch calls, wildfires, National Weather
+Service alerts, earthquakes, geolocated GDELT news and weather, with a time
+slider. It uses the replay readers for the collected data, so it shows what
+replay would send, and needs no API keys and no extra packages.
 
 ```bash
 python -m explorer.server            # http://127.0.0.1:8095
@@ -198,21 +199,41 @@ python -m explorer.server --days 7   # load more history (default 3 days)
 
 It reads `paths.data_root` from `config.json` (or `--data-root`) and binds to
 localhost. From another machine, forward the port first:
-`ssh -L 8095:localhost:8095 <user>@<server>`. CHP incidents arrive as a daily
-file the next morning, so the current day has none.
+`ssh -L 8095:localhost:8095 <user>@<server>`.
 
-The Wildfires layer fetches public feeds every 10 minutes (no keys): CAL FIRE
-incidents, NIFC perimeters and incident points, and NASA FIRMS satellite heat
-detections. Snapshots are kept for 14 days in `processing-output/fire-feeds`,
-so the time slider shows each fire as it stood. A fire's popup lists the GDELT
-articles that name it, the acreage and containment the newest article reports,
-and the AlertCalifornia cameras whose view covers it. Link to a fire with
-`#fire-<name>`, e.g. `http://127.0.0.1:8095/#fire-bryson`.
+While it runs, it also collects public live feeds into
+`processing-output/live-feeds` (kept 14 days, saved only when they change, so
+the slider shows each as it stood): CHP dispatch calls every 2 minutes, NWS
+alerts and USGS earthquakes every 5, and CAL FIRE, NIFC perimeters and
+incident points and NASA FIRMS heat detections every 10. `--no-feeds` turns
+collection off. Before live CHP collection started, the CHP layer falls back
+to CHP's daily incident file, which arrives the next morning.
 
-To share a moment without the server, export a self-contained page (basemap,
-camera thumbnails and fire time-lapses embedded, about 6 MB) while the
-explorer is running: `python3 explorer/export.py --out fire-desk.html`.
-It needs Pillow; the system Python has it.
+A fire's popup lists the GDELT articles that name it, the acreage and
+containment the newest article reports, and the AlertCalifornia cameras whose
+view covers it. Link to a fire with `#fire-<name>`, e.g.
+`http://127.0.0.1:8095/#fire-bryson`.
+
+### Agent beliefs
+
+The Beliefs tab shows what an agent believes about the world, how sure it
+is, how that changed over time, and the evidence for and against each
+belief, with lines on the map from each belief to its evidence. Agents write
+one JSON Lines file per run to `processing-output/beliefs`; each line is a
+full revision of one belief. `explorer/beliefs.py` documents the format and
+has a small writer:
+
+```python
+from explorer.beliefs import BeliefLog, evidence
+log = BeliefLog("processing-output/beliefs/my-run.jsonl", agent="my-agent")
+log.record("bryson-growing", "The Bryson Fire is still growing", 0.8,
+           parents=["bryson-burning"], lat=34.09, lon=-118.84, topic="Bryson Fire",
+           evidence=[evidence("supports", "calfire", title="147 to 250 acres", weight=0.6)])
+```
+
+`python -m explorer.example_beliefs` writes an example run from fixed rules
+(not an LLM; it costs nothing) so the viewer has something to show. Link to a
+belief with `#belief-<id>`.
 
 ## Verify changes
 

@@ -23,6 +23,7 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -33,9 +34,16 @@ from .example_beliefs import distance_km, facing
 HERE = Path(__file__).parent
 REPOSITORY = HERE.parent
 USER_AGENT = "urban-observation-explorer/1.0"
-TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+# USGS National Map topo tiles: public domain, so saving a copy is allowed
+# (OpenStreetMap's tile servers forbid bulk downloads).
+TILE_URL = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"
+ATTRIBUTION = "Basemap: USGS The National Map"
 # (south, west, north, east, zoom): the whole area, then the Santa Monica Mountains in detail.
-BASEMAPS = [(33.25, -119.25, 34.85, -117.3, 10), (33.98, -119.0, 34.22, -118.55, 12)]
+# (south, west, north, east, zoom, map zoom from which it shows): an overview,
+# the whole area in more detail, and the populated core (Malibu to Pomona) at street level.
+BASEMAPS = [(33.25, -119.25, 34.85, -117.3, 10, 0), (33.25, -119.25, 34.85, -117.3, 12, 11),
+            (33.70, -118.95, 34.35, -117.70, 14, 13)]
+CHUNK_TILES = 8  # 2048-pixel images, loaded only when in view
 WINDOW_HOURS = 3
 SEQUENCE_STEP = timedelta(minutes=30)
 SEQUENCE_HOURS = 24
@@ -158,25 +166,33 @@ def tile_lat(y: float, zoom: int) -> float:
     return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / 2 ** zoom))))
 
 
-def basemap(south, west, north, east, zoom, tiles: Path, out: Path) -> dict:
-    """Stitch OpenStreetMap tiles into one image (tiles are fetched once and kept)."""
+def basemap(south, west, north, east, zoom, show_from, tiles: Path, out: Path) -> list[dict]:
+    """Stitch tiles into chunk images (tiles are fetched once and kept)."""
     x0, y0 = (int(v) for v in tile_xy(north, west, zoom))
     x1, y1 = (int(v) for v in tile_xy(south, east, zoom))
-    name = f"basemap-{zoom}.jpg"
-    if not (out / name).exists():
-        tiles.mkdir(parents=True, exist_ok=True)
-        canvas = Image.new("RGB", ((x1 - x0 + 1) * 256, (y1 - y0 + 1) * 256))
-        for x in range(x0, x1 + 1):
-            for y in range(y0, y1 + 1):
-                path = tiles / f"{zoom}-{x}-{y}.png"
-                if not path.exists():
-                    url = TILE_URL.format(z=zoom, x=x, y=y)
-                    with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=30) as response:
-                        path.write_bytes(response.read())
-                canvas.paste(Image.open(path).convert("RGB"), ((x - x0) * 256, (y - y0) * 256))
-        canvas.save(out / name, "JPEG", quality=74, optimize=True, progressive=True)
-    bounds = [[tile_lat(y1 + 1, zoom), x0 / 2 ** zoom * 360 - 180], [tile_lat(y0, zoom), (x1 + 1) / 2 ** zoom * 360 - 180]]
-    return {"src": name, "bounds": bounds}
+    chunks = []
+    for cx in range(x0, x1 + 1, CHUNK_TILES):
+        for cy in range(y0, y1 + 1, CHUNK_TILES):
+            xe, ye = min(cx + CHUNK_TILES - 1, x1), min(cy + CHUNK_TILES - 1, y1)
+            name = f"basemap/{zoom}-{cx}-{cy}.jpg"
+            if not (out / name).exists():
+                (out / "basemap").mkdir(parents=True, exist_ok=True)
+                tiles.mkdir(parents=True, exist_ok=True)
+                canvas = Image.new("RGB", ((xe - cx + 1) * 256, (ye - cy + 1) * 256), "white")
+                for x in range(cx, xe + 1):
+                    for y in range(cy, ye + 1):
+                        path = tiles / f"{zoom}-{x}-{y}.jpg"
+                        if not path.exists():
+                            with urlopen(Request(TILE_URL.format(z=zoom, x=x, y=y), headers={"User-Agent": USER_AGENT}),
+                                         timeout=30) as response:
+                                path.write_bytes(response.read())
+                            time.sleep(0.05)  # be gentle with the public server
+                        canvas.paste(Image.open(path).convert("RGB"), ((x - cx) * 256, (y - cy) * 256))
+                canvas.save(out / name, "JPEG", quality=72, optimize=True, progressive=True)
+            bounds = [[tile_lat(ye + 1, zoom), cx / 2 ** zoom * 360 - 180],
+                      [tile_lat(cy, zoom), (xe + 1) / 2 ** zoom * 360 - 180]]
+            chunks.append({"src": name, "bounds": bounds, "zoom": zoom, "from": show_from})
+    return chunks
 
 
 def page(basemaps: list[dict]) -> str:
@@ -188,7 +204,7 @@ def page(basemaps: list[dict]) -> str:
     styles = "\n".join((static / name).read_text() for name in (
         "vendor/leaflet.css", "vendor/MarkerCluster.min.css", "vendor/MarkerCluster.Default.min.css", "style.css"))
     scripts = "\n".join(re.findall(r'<script src="https://cdnjs[^"]+"></script>', html))
-    settings = json.dumps({"data": "data.json", "version": "version.json", "basemaps": basemaps})
+    settings = json.dumps({"data": "data.json", "version": "version.json", "basemaps": basemaps, "attribution": ATTRIBUTION})
     app = (static / "app.js").read_text()
     assert "</script" not in app
     return (f"{title}\n<style>\n{styles}\n</style>\n{body}{scripts}\n"
@@ -207,7 +223,7 @@ def main() -> None:
     cache = out.parent
     data_root = Path(args.data_root or json.loads((REPOSITORY / "config.json").read_text())["paths"]["data_root"])
 
-    basemaps = [basemap(*b, cache / "tiles", out) for b in BASEMAPS]
+    basemaps = [chunk for b in BASEMAPS for chunk in basemap(*b, cache / "usgs-tiles", out)]
     (out / "index.html").write_text(page(basemaps))
     data = Builder(args.server, data_root, cache).build(datetime.now(timezone.utc))
     text = json.dumps(data, separators=(",", ":"))

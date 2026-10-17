@@ -22,10 +22,26 @@ const ago = (iso, at) => {
 const STATIC = window.SITUATION_STATIC || null;
 let staticData = null;
 
-const map = L.map("map", { zoomControl: true, preferCanvas: true, ...(STATIC ? { minZoom: 9, maxZoom: 14 } : {}) })
+const map = L.map("map", { zoomControl: true, preferCanvas: true, ...(STATIC ? { minZoom: 9, maxZoom: 16 } : {}) })
   .setView([34.06, -118.45], 10);
 if (STATIC) {
-  for (const b of STATIC.basemaps) L.imageOverlay(b.src, b.bounds, { pane: "tilePane", attribution: "© OpenStreetMap contributors" }).addTo(map);
+  // Basemap chunks, each level in its own pane so finer levels stay on top; a
+  // chunk loads only once the map is zoomed in far enough and it is in view.
+  const chunks = STATIC.basemaps.map((b) => {
+    const pane = `base${b.zoom}`;
+    if (!map.getPane(pane)) map.createPane(pane).style.zIndex = 100 + b.zoom;
+    return { ...b, layer: L.imageOverlay(b.src, b.bounds, { pane, attribution: STATIC.attribution }) };
+  });
+  const showChunks = () => {
+    const zoom = map.getZoom(), view = map.getBounds().pad(0.3);
+    for (const c of chunks) {
+      const on = zoom >= c.from && view.intersects(c.bounds);
+      if (on && !map.hasLayer(c.layer)) c.layer.addTo(map);
+      else if (!on && map.hasLayer(c.layer)) map.removeLayer(c.layer);
+    }
+  };
+  map.on("zoomend moveend", showChunks);
+  showChunks();
   map.setMaxBounds(L.latLngBounds(STATIC.basemaps[0].bounds).pad(0.05));
 } else {
   const base = {
@@ -33,6 +49,8 @@ if (STATIC) {
       maxZoom: 19, attribution: "© OpenStreetMap contributors" }),
     "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }),
+    "USGS Topo": L.tileLayer("https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 16, attribution: "USGS The National Map" }),
   };
   base["Streets"].addTo(map);
   L.control.layers(base, null, { position: "topleft" }).addTo(map);

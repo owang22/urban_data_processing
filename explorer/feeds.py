@@ -246,6 +246,10 @@ class FeedStore:
                 statuses[name] = f"error: {exc}"
                 continue
             statuses[name] = "saved" if self._save(name, feed.suffix, content, now) else "unchanged"
+            # Snapshots are written only on change, so log every good fetch: it
+            # tells "unchanged" apart from "collection was down".
+            with (self.cache / name / "fetches.log").open("a") as log:
+                log.write(now.strftime(STAMP) + "\n")
         self._prune(now)
         return statuses
 
@@ -266,6 +270,9 @@ class FeedStore:
     def _prune(self, now: datetime) -> None:
         cutoff = (now - timedelta(days=KEEP_DAYS)).strftime(STAMP)
         for name in FEEDS:
+            log = self.cache / name / "fetches.log"
+            if log.exists() and log.read_text()[:16] < cutoff:
+                log.write_text("".join(l + "\n" for l in log.read_text().splitlines() if l >= cutoff))
             for path in (self.cache / name).glob("2*"):
                 if path.name[:16] < cutoff:
                     path.unlink(missing_ok=True)
@@ -301,6 +308,14 @@ class FeedStore:
 
     # -- reading -------------------------------------------------------------
 
+    def _fetched(self, feed: str, at: datetime, within: timedelta) -> bool:
+        """Was the feed fetched successfully in the `within` before `at`?"""
+        log = self.cache / feed / "fetches.log"
+        if not log.exists():
+            return False
+        low, high = (at - within).strftime(STAMP), at.strftime(STAMP)
+        return any(low <= line.strip() <= high for line in log.read_text().splitlines())
+
     def latest(self, feed: str, at: datetime, max_age: timedelta | None = None) -> tuple[Path, datetime] | None:
         """The newest snapshot of a feed taken at or before `at`."""
         folder = self.cache / feed
@@ -314,7 +329,7 @@ class FeedStore:
                 continue
             if stamp <= at and (best is None or stamp > best[1]):
                 best = (path, stamp)
-        if best and max_age is not None and at - best[1] > max_age:
+        if best and max_age is not None and at - best[1] > max_age and not self._fetched(feed, at, max_age):
             return None  # collection was down then
         return best
 

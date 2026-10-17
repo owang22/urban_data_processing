@@ -128,6 +128,9 @@ def test_chp_calls_are_clipped_and_read_as_of_time(tmp_path):
     assert [c["kind"] for c in live["chp"]] == ["injury"]
     # An hour later with no newer snapshot, collection was down: no live calls.
     assert store.live(datetime(2026, 10, 17, 8, 10, tzinfo=timezone.utc), 3)["chp"] is None
+    # Unchanged but still fetched: the old snapshot still holds.
+    (tmp_path / "chp-live" / "fetches.log").write_text("20261017T080500Z\n")
+    assert len(store.live(datetime(2026, 10, 17, 8, 10, tzinfo=timezone.utc), 3)["chp"]) == 1
 
 
 def test_zone_outlines_keep_their_shape():
